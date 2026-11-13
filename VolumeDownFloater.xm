@@ -84,7 +84,6 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 接收来自 App 的显示/隐藏指令
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
@@ -120,14 +119,17 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// 接收带数据的通知
-static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    NSString *stateStr = (__bridge NSString *)object;
-    BOOL visible = [stateStr isEqualToString:@"1"];
-    [[FloaterManager sharedInstance] setVisibility:visible];
+// 核心：注册两个独立的事件监听
+static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] setVisibility:YES];
+}
+
+static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] setVisibility:NO];
 }
 
 __attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR("com.yourname.volumedownfloater/toggle"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
