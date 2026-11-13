@@ -32,6 +32,7 @@ void simulateVolumeDown(void) {
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
+@property (strong, nonatomic) UILabel *titleLabel; // 新增：专门用来显示文字和旋转
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -72,44 +73,50 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
+        // 1. 创建圆形背景按钮（去掉默认的 Title，防止旋转时出现阴影残影）
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = self.window.rootViewController.view.bounds;
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         self.floatBtn.layer.cornerRadius = btnSize / 2.0;
         self.floatBtn.layer.masksToBounds = YES;
-        
-        [self updateTitle];
+        self.floatBtn.adjustsImageWhenHighlighted = NO; // 防止点击时变暗
         
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
-        
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
-        // 核心：监听设备方向变化
+        // 2. 创建独立的文字标签，放在球的中间
+        self.titleLabel = [[UILabel alloc] initWithFrame:self.floatBtn.bounds];
+        self.titleLabel.textColor = [UIColor whiteColor];
+        self.titleLabel.textAlignment = NSTextAlignmentCenter;
+        self.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        self.titleLabel.userInteractionEnabled = NO; // 让点击事件穿透给底部的按钮
+        [self.floatBtn addSubview:self.titleLabel];
+        
+        [self updateTitle];
+        
+        // 监听设备方向变化
         [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-// 只旋转按钮本身，让文字始终正对着用户
+// 核心修复：只旋转文字标签，背景球不动
 - (void)handleRotation {
     UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
-    CGAffineTransform transform = CGAffineTransformIdentity; // 默认竖屏不转
+    CGAffineTransform transform = CGAffineTransformIdentity;
     
     if (orientation == UIDeviceOrientationLandscapeLeft) {
-        // 横屏左（设备向左转，内容向右转）
         transform = CGAffineTransformMakeRotation(M_PI_2);
     } else if (orientation == UIDeviceOrientationLandscapeRight) {
-        // 横屏右（设备向右转，内容向左转）
         transform = CGAffineTransformMakeRotation(-M_PI_2);
     } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
-        // 倒置（极少用）
         transform = CGAffineTransformMakeRotation(M_PI);
     }
     
-    // 平滑动画旋转
+    // 只改变 titleLabel 的 transform，球完全保持原样
     [UIView animateWithDuration:0.3 animations:^{
-        self.floatBtn.transform = transform;
+        self.titleLabel.transform = transform;
     }];
 }
 
@@ -120,7 +127,7 @@ void simulateVolumeDown(void) {
         title = @"音量-";
     }
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self.floatBtn setTitle:title forState:UIControlStateNormal];
+        self.titleLabel.text = title;
     });
 }
 
@@ -128,7 +135,7 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         if (visible) {
-            [self handleRotation]; // 显示时立刻同步一次方向
+            [self handleRotation];
         }
     });
 }
@@ -142,9 +149,6 @@ void simulateVolumeDown(void) {
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
-    
-    // 因为按钮发生了旋转（transform），所以坐标转换需要特殊处理
-    // 直接用 window.center 加上位移是最稳妥的
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
     
     CGFloat btnRadius = self.window.bounds.size.width / 2.0;
