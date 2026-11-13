@@ -24,15 +24,18 @@
     self.toggleSwitch.center = CGPointMake(self.window.bounds.size.width/2, 250);
     self.toggleSwitch.transform = CGAffineTransformMakeScale(1.5, 1.5);
     
-    // App 内部自己存状态（这样关掉 App 再打开，开关状态还在）
     BOOL isOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"toggleState"];
     self.toggleSwitch.on = isOn;
     
     [self.toggleSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [vc.view addSubview:self.toggleSwitch];
     
-    // 每次打开 App 时，强制同步一次当前状态给 Tweak
-    [self syncState:self.toggleSwitch.isOn];
+    // App 启动时，如果开关是开的，强制发一次 Show 信号给悬浮球
+    if (isOn) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/show"), NULL, NULL, YES);
+    } else {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/hide"), NULL, NULL, YES);
+    }
     
     return YES;
 }
@@ -41,16 +44,15 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"toggleState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    [self syncState:sender.isOn];
+    // 核心：根据状态发送不同的独立指令
+    if (sender.isOn) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/show"), NULL, NULL, YES);
+    } else {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/hide"), NULL, NULL, YES);
+    }
     
     UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [gen impactOccurred];
-}
-
-- (void)syncState:(BOOL)isOn {
-    CFStringRef stateString = isOn ? CFSTR("1") : CFSTR("0");
-    // 核心：利用 Notification 传参，完全绕过沙盒！
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/toggle"), stateString, NULL, YES);
 }
 @end
 
