@@ -24,6 +24,10 @@ jobs:
 
       - name: Compile Deb
         run: |
+          # 关键新增：赋予脚本可执行权限
+          chmod +x layout/DEBIAN/postinst
+          chmod +x layout/DEBIAN/postrm
+          
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
 
       - name: Upload Deb
