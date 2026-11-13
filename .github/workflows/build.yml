@@ -31,7 +31,7 @@ jobs:
           cd SwitchApp
           make clean
           make
-          make stage  # 关键新增：生成完整的 .app 目录结构
+          make stage
           mkdir -p Payload
           cp -R .theos/_/Applications/VolumeSwitch.app Payload/
           zip -r VolumeSwitch.ipa Payload
