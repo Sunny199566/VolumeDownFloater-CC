@@ -1,0 +1,183 @@
+#import <UIKit/UIKit.h>
+#import <dlfcn.h>
+#import <mach/mach_time.h>
+#import "VolumeDownFloaterPrefs.h"
+
+// 底层 HID 事件定义
+typedef struct __IOHIDEvent *IOHIDEventRef;
+typedef CFTypeRef IOHIDEventSystemClientRef;
+typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
+typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
+typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
+
+void simulateVolumeDown(void) {
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!handle) return;
+
+    IOHIDEventCreateKeyboardEvent_t createEvent = (IOHIDEventCreateKeyboardEvent_t)dlsym(handle, "IOHIDEventCreateKeyboardEvent");
+    IOHIDEventSystemClientCreate_t createClient = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
+    IOHIDEventSystemClientDispatchEvent_t dispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
+
+    if (createEvent && createClient && dispatchEvent) {
+        IOHIDEventSystemClientRef client = createClient(kCFAllocatorDefault);
+        if (client) {
+            uint64_t timestamp = mach_absolute_time();
+            
+            IOHIDEventRef downEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, true, 0);
+            if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
+            
+            usleep(50000);
+            
+            IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, false, 0);
+            if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
+            
+            CFRelease(client);
+        }
+    }
+    dlclose(handle);
+}
+
+@interface FloaterManager : NSObject
+@property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UIButton *floatBtn;
+@property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (strong, nonatomic) UINotificationFeedbackGenerator *notifyGenerator;
+@property (nonatomic, assign) BOOL isActive; 
++ (instancetype)sharedInstance;
+- (void)setup;
+- (void)updateVisibility;
+@end
+
+@implementation FloaterManager
+
++ (instancetype)sharedInstance {
+    static FloaterManager *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ instance = [[FloaterManager alloc] init]; });
+    return instance;
+}
+
+- (void)setup {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *windowScene = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
+        }
+        
+        CGFloat btnSize = 60.0;
+        
+        if (@available(iOS 13.0, *)) {
+            if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
+        }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, btnSize, btnSize)]; }
+        
+        self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
+        self.window.windowLevel = UIWindowLevelAlert + 2000;
+        self.window.backgroundColor = [UIColor clearColor];
+        self.window.rootViewController = [UIViewController new];
+        self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
+        self.window.hidden = YES; // 默认隐藏，由控制中心开关决定
+
+        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [self.hapticGenerator prepare];
+        
+        self.notifyGenerator = [[UINotificationFeedbackGenerator alloc] init];
+        [self.notifyGenerator prepare];
+        
+        self.isActive = YES;
+
+        self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.floatBtn.frame = self.window.rootViewController.view.bounds;
+        self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
+        self.floatBtn.layer.cornerRadius = btnSize / 2.0;
+        self.floatBtn.layer.masksToBounds = YES;
+        [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
+        
+        [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
+        
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+        longPress.minimumPressDuration = 0.5;
+        [self.floatBtn addGestureRecognizer:longPress];
+        
+        [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+        
+        [self.window.rootViewController.view addSubview:self.floatBtn];
+        
+        [self updateVisibility];
+    });
+}
+
+- (void)updateVisibility {
+    Boolean keyExists = NO;
+    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), (__bridge CFStringRef)kVolumeDownPrefsDomain, &keyExists);
+    if (!keyExists) { enabled = NO; }
+    self.window.hidden = !enabled;
+}
+
+- (void)btnTapped {
+    if (self.window.hidden || !self.isActive) return;
+
+    [self.hapticGenerator impactOccurred];
+    [self.hapticGenerator prepare]; 
+    simulateVolumeDown();
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.isActive = !self.isActive;
+        
+        CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+        
+        [UIView animateWithDuration:0.3 animations:^{
+            if (self.isActive) {
+                self.window.frame = CGRectMake(self.window.frame.origin.x, self.window.frame.origin.y, 60.0, 60.0);
+                self.floatBtn.layer.cornerRadius = 30.0;
+                self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
+                [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
+                [self.notifyGenerator notificationOccurred:UINotificationFeedbackTypeSuccess];
+            } else {
+                CGFloat smallSize = 12.0;
+                CGFloat newX = screenWidth - smallSize - 2;
+                CGFloat newY = self.window.center.y;
+                
+                self.window.frame = CGRectMake(newX, newY - smallSize/2, smallSize, smallSize);
+                self.floatBtn.layer.cornerRadius = smallSize / 2.0;
+                self.floatBtn.backgroundColor = [UIColor colorWithWhite:0.7 alpha:0.3];
+                [self.floatBtn setTitle:@"" forState:UIControlStateNormal];
+                [self.notifyGenerator notificationOccurred:UINotificationFeedbackTypeWarning];
+            }
+        }];
+        [self.notifyGenerator prepare];
+    }
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    CGPoint translation = [pan translationInView:self.window];
+    CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+    
+    CGFloat btnRadius = self.window.bounds.size.width / 2.0;
+    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    
+    CGFloat padding = 10.0;
+    CGFloat minX = btnRadius + padding;
+    CGFloat maxX = screenWidth - btnRadius - padding;
+    CGFloat minY = btnRadius + 50.0;
+    CGFloat maxY = screenHeight - btnRadius - 30.0;
+    
+    newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+    newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+    
+    self.window.center = newCenter;
+    [pan setTranslation:CGPointZero inView:self.window];
+}
+@end
+
+static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] updateVisibility]; });
+}
+
+__attribute__((constructor)) static void initFloater() {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR(kVolumeDownToggleNotification), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
+}
