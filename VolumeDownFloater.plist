@@ -7,7 +7,6 @@
         <key>Executables</key>
         <array>
             <string>SpringBoard</string>
-            <string>ControlCenter</string>
         </array>
     </dict>
 </dict>
