@@ -10,5 +10,5 @@ VolumeDownFloater_CFLAGS = -fobjc-arc -Wno-everything
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-SUBPROJECTS += ccmodule
+SUBPROJECTS += app
 include $(THEOS_MAKE_PATH)/aggregate.mk
