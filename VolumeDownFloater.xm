@@ -29,14 +29,6 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// 核心修复：创建一个允许旋转的 ViewController
-@interface FloaterViewController : UIViewController
-@end
-@implementation FloaterViewController
-- (BOOL)shouldAutorotate { return YES; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
-@end
-
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
@@ -73,9 +65,7 @@ void simulateVolumeDown(void) {
         self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
-        
-        // 使用自定义的 Controller 支持旋转
-        self.window.rootViewController = [FloaterViewController new];
+        self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
 
@@ -95,38 +85,32 @@ void simulateVolumeDown(void) {
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
-        // 监听设备旋转通知
+        // 核心：监听设备方向变化
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-// 当屏幕旋转时，强制把悬浮球拉回安全区域
+// 只旋转按钮本身，让文字始终正对着用户
 - (void)handleRotation {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        // 获取当前窗口所在的屏幕尺寸（横屏时宽高会互换）
-        CGRect screenBounds = self.window.screen.bounds;
-        CGFloat screenWidth = screenBounds.size.width;
-        CGFloat screenHeight = screenBounds.size.height;
-        
-        CGFloat btnRadius = self.window.bounds.size.width / 2.0;
-        CGFloat padding = 10.0;
-        
-        // 重新计算边界
-        CGFloat minX = btnRadius + padding;
-        CGFloat maxX = screenWidth - btnRadius - padding;
-        CGFloat minY = btnRadius + 50.0; // 避开刘海/灵动岛
-        CGFloat maxY = screenHeight - btnRadius - 30.0; // 避开底部小白条
-        
-        // 限制中心点
-        CGPoint currentCenter = self.window.center;
-        currentCenter.x = MAX(minX, MIN(currentCenter.x, maxX));
-        currentCenter.y = MAX(minY, MIN(currentCenter.y, maxY));
-        
-        // 加上平滑动画，防止瞬间跳动
-        [UIView animateWithDuration:0.3 animations:^{
-            self.window.center = currentCenter;
-        }];
-    });
+    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
+    CGAffineTransform transform = CGAffineTransformIdentity; // 默认竖屏不转
+    
+    if (orientation == UIDeviceOrientationLandscapeLeft) {
+        // 横屏左（设备向左转，内容向右转）
+        transform = CGAffineTransformMakeRotation(M_PI_2);
+    } else if (orientation == UIDeviceOrientationLandscapeRight) {
+        // 横屏右（设备向右转，内容向左转）
+        transform = CGAffineTransformMakeRotation(-M_PI_2);
+    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
+        // 倒置（极少用）
+        transform = CGAffineTransformMakeRotation(M_PI);
+    }
+    
+    // 平滑动画旋转
+    [UIView animateWithDuration:0.3 animations:^{
+        self.floatBtn.transform = transform;
+    }];
 }
 
 - (void)updateTitle {
@@ -144,7 +128,7 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         if (visible) {
-            [self handleRotation]; // 显示时也顺便检查一下边界
+            [self handleRotation]; // 显示时立刻同步一次方向
         }
     });
 }
@@ -158,10 +142,13 @@ void simulateVolumeDown(void) {
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
+    
+    // 因为按钮发生了旋转（transform），所以坐标转换需要特殊处理
+    // 直接用 window.center 加上位移是最稳妥的
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
     
     CGFloat btnRadius = self.window.bounds.size.width / 2.0;
-    CGRect screenBounds = self.window.screen.bounds;
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
     CGFloat screenWidth = screenBounds.size.width;
     CGFloat screenHeight = screenBounds.size.height;
     
