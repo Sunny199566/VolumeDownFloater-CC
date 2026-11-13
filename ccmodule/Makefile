@@ -6,6 +6,7 @@ include $(THEOS)/makefiles/common.mk
 BUNDLE_NAME = VolumeDownModule
 VolumeDownModule_FILES = VolumeDownModule.m
 VolumeDownModule_FRAMEWORKS = UIKit
+VolumeDownModule_LDFLAGS = -Wl,-undefined,dynamic_lookup
 VolumeDownModule_INSTALL_PATH = /Library/ControlCenter/Bundles
 
 include $(THEOS_MAKE_PATH)/bundle.mk
