@@ -29,6 +29,14 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
+// 核心修复：创建一个允许旋转的 ViewController
+@interface FloaterViewController : UIViewController
+@end
+@implementation FloaterViewController
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+@end
+
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
@@ -36,6 +44,8 @@ void simulateVolumeDown(void) {
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
+- (void)updateTitle;
+- (void)handleRotation;
 @end
 
 @implementation FloaterManager
@@ -63,9 +73,11 @@ void simulateVolumeDown(void) {
         self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
-        self.window.rootViewController = [UIViewController new];
+        
+        // 使用自定义的 Controller 支持旋转
+        self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES; // 默认隐藏
+        self.window.hidden = YES;
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
@@ -75,18 +87,65 @@ void simulateVolumeDown(void) {
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         self.floatBtn.layer.cornerRadius = btnSize / 2.0;
         self.floatBtn.layer.masksToBounds = YES;
-        [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
+        
+        [self updateTitle];
         
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
+        
+        // 监听设备旋转通知
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIDeviceOrientationDidChangeNotification object:nil];
+    });
+}
+
+// 当屏幕旋转时，强制把悬浮球拉回安全区域
+- (void)handleRotation {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 获取当前窗口所在的屏幕尺寸（横屏时宽高会互换）
+        CGRect screenBounds = self.window.screen.bounds;
+        CGFloat screenWidth = screenBounds.size.width;
+        CGFloat screenHeight = screenBounds.size.height;
+        
+        CGFloat btnRadius = self.window.bounds.size.width / 2.0;
+        CGFloat padding = 10.0;
+        
+        // 重新计算边界
+        CGFloat minX = btnRadius + padding;
+        CGFloat maxX = screenWidth - btnRadius - padding;
+        CGFloat minY = btnRadius + 50.0; // 避开刘海/灵动岛
+        CGFloat maxY = screenHeight - btnRadius - 30.0; // 避开底部小白条
+        
+        // 限制中心点
+        CGPoint currentCenter = self.window.center;
+        currentCenter.x = MAX(minX, MIN(currentCenter.x, maxX));
+        currentCenter.y = MAX(minY, MIN(currentCenter.y, maxY));
+        
+        // 加上平滑动画，防止瞬间跳动
+        [UIView animateWithDuration:0.3 animations:^{
+            self.window.center = currentCenter;
+        }];
+    });
+}
+
+- (void)updateTitle {
+    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
+    NSString *title = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!title || title.length == 0) {
+        title = @"音量-";
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.floatBtn setTitle:title forState:UIControlStateNormal];
     });
 }
 
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
+        if (visible) {
+            [self handleRotation]; // 显示时也顺便检查一下边界
+        }
     });
 }
 
@@ -102,8 +161,9 @@ void simulateVolumeDown(void) {
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
     
     CGFloat btnRadius = self.window.bounds.size.width / 2.0;
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    CGRect screenBounds = self.window.screen.bounds;
+    CGFloat screenWidth = screenBounds.size.width;
+    CGFloat screenHeight = screenBounds.size.height;
     
     CGFloat padding = 10.0;
     CGFloat minX = btnRadius + padding;
@@ -119,7 +179,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// 核心：注册两个独立的事件监听
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
@@ -128,8 +187,13 @@ static void hideFloater(CFNotificationCenterRef center, void *observer, CFString
     [[FloaterManager sharedInstance] setVisibility:NO];
 }
 
+static void updateText(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] updateTitle];
+}
+
 __attribute__((constructor)) static void initFloater() {
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateText, CFSTR("com.yourname.volumedownfloater/update_text"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
