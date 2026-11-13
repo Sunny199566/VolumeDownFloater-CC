@@ -1,8 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import "VolumeDownFloaterPrefs.h"
 
+// 底层 HID 事件定义
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
@@ -36,33 +36,37 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 + (instancetype)sharedInstance;
 - (void)setup;
-- (void)updateVisibility;
+- (void)toggleVisibility;
 @end
 
 @implementation FloaterManager
+
 + (instancetype)sharedInstance {
     static FloaterManager *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ instance = [[FloaterManager alloc] init]; });
     return instance;
 }
+
 - (void)setup {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindowScene *windowScene = nil;
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
+        
         CGFloat btnSize = 60.0;
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, btnSize, btnSize)]; }
+        
         self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES;
+        self.window.hidden = YES; // 默认隐藏
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
@@ -73,43 +77,85 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.cornerRadius = btnSize / 2.0;
         self.floatBtn.layer.masksToBounds = YES;
         [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
+        
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+        
         [self.window.rootViewController.view addSubview:self.floatBtn];
-
-        [self updateVisibility];
     });
 }
-- (void)updateVisibility {
-    Boolean keyExists = NO;
-    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), (__bridge CFStringRef)kVolumeDownPrefsDomain, &keyExists);
-    if (!keyExists) { enabled = NO; }
-    self.window.hidden = !enabled;
+
+- (void)toggleVisibility {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.window.hidden = !self.window.hidden;
+        // 切换时给个震动反馈
+        UINotificationFeedbackGenerator *gen = [[UINotificationFeedbackGenerator alloc] init];
+        if (self.window.hidden) {
+            [gen notificationOccurred:UINotificationFeedbackTypeWarning];
+        } else {
+            [gen notificationOccurred:UINotificationFeedbackTypeSuccess];
+        }
+    });
 }
+
 - (void)btnTapped {
     if (self.window.hidden) return;
     [self.hapticGenerator impactOccurred];
-    [self.hapticGenerator prepare];
+    [self.hapticGenerator prepare]; 
     simulateVolumeDown();
 }
+
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+    
     CGFloat btnRadius = self.window.bounds.size.width / 2.0;
     CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    
     CGFloat padding = 10.0;
-    newCenter.x = MAX(btnRadius + padding, MIN(newCenter.x, screenWidth - btnRadius - padding));
-    newCenter.y = MAX(btnRadius + 50.0, MIN(newCenter.y, screenHeight - btnRadius - 30.0));
+    CGFloat minX = btnRadius + padding;
+    CGFloat maxX = screenWidth - btnRadius - padding;
+    CGFloat minY = btnRadius + 50.0;
+    CGFloat maxY = screenHeight - btnRadius - 30.0;
+    
+    newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+    newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+    
     self.window.center = newCenter;
     [pan setTranslation:CGPointZero inView:self.window];
 }
 @end
 
-static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] updateVisibility]; });
+// ================= 核心：拦截控制中心的“放大器”点击事件 =================
+// iOS 17 中放大器控制中心模块的类名通常叫 CCUIMagnifierModule
+%hook CCUIMagnifierModule
+
+// 拦截按钮点击的方法
+- (void)buttonTapped:(id)sender {
+    // 当用户点击放大器时，切换悬浮球的显示/隐藏
+    [[FloaterManager sharedInstance] toggleVisibility];
+    // 注意：这里我们故意不调用 %orig（即不执行原生的启动放大器逻辑），这样放大器就不会弹出来了
 }
+
+%end
+
+// 如果系统底层类名有变化，再 Hook 一个通用基类做备用
+%hook CCUIButtonModuleViewController
+- (void)buttonTapped:(id)sender {
+    // 判断当前点击的是不是放大器模块
+    if ([self respondsToSelector:@selector(module)] && [[self valueForKey:@"module"] respondsToSelector:@selector(identifier)]) {
+        NSString *identifier = [[self valueForKey:@"module"] valueForKey:@"identifier"];
+        if ([identifier containsString:@"magnifier"] || [identifier containsString:@"Magnifier"]) {
+            [[FloaterManager sharedInstance] toggleVisibility];
+            return; // 拦截，不调用原方法
+        }
+    }
+    %orig;
+}
+%end
+// =======================================================================
+
 __attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR(kVolumeDownToggleNotification), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
