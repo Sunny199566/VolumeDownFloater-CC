@@ -1,4 +1,4 @@
-name: Build Jailbreak Deb
+name: Build Tweak and Switch App
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Theos Manually
+      - name: Setup Theos
         run: |
           brew install ldid dpkg
           export THEOS="${{ github.workspace }}/theos"
@@ -22,16 +22,27 @@ jobs:
           rm -rf $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
 
-      - name: Compile Deb
+      - name: Compile Tweak (Deb)
         run: |
-          # 关键新增：赋予脚本可执行权限
-          chmod +x layout/DEBIAN/postinst
-          chmod +x layout/DEBIAN/postrm
-          
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
+
+      - name: Compile Switch App (IPA)
+        run: |
+          cd SwitchApp
+          make clean
+          make
+          mkdir -p Payload
+          cp -R .theos/_/Applications/VolumeSwitch.app Payload/
+          zip -r VolumeSwitch.ipa Payload
 
       - name: Upload Deb
         uses: actions/upload-artifact@v4
         with:
           name: VolumeDown-Deb
           path: packages/*.deb
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: VolumeSwitch-IPA
+          path: SwitchApp/VolumeSwitch.ipa
