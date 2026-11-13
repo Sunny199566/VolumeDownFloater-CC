@@ -88,7 +88,6 @@ void simulateVolumeDown(void) {
 - (void)toggleVisibility {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !self.window.hidden;
-        // 切换时给个震动反馈
         UINotificationFeedbackGenerator *gen = [[UINotificationFeedbackGenerator alloc] init];
         if (self.window.hidden) {
             [gen notificationOccurred:UINotificationFeedbackTypeWarning];
@@ -127,34 +126,35 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// ================= 核心：拦截控制中心的“放大器”点击事件 =================
-// iOS 17 中放大器控制中心模块的类名通常叫 CCUIMagnifierModule
+// ================= 核心修复：欺骗编译器，告诉它这俩类是 UIViewController =================
+@interface CCUIButtonModuleViewController : UIViewController
+@end
+
+@interface CCUIMagnifierModule : CCUIButtonModuleViewController
+@end
+// =======================================================================================
+
 %hook CCUIMagnifierModule
 
-// 拦截按钮点击的方法
 - (void)buttonTapped:(id)sender {
-    // 当用户点击放大器时，切换悬浮球的显示/隐藏
     [[FloaterManager sharedInstance] toggleVisibility];
-    // 注意：这里我们故意不调用 %orig（即不执行原生的启动放大器逻辑），这样放大器就不会弹出来了
+    // 不调用 %orig; 彻底拦截放大器原本的启动行为
 }
 
 %end
 
-// 如果系统底层类名有变化，再 Hook 一个通用基类做备用
 %hook CCUIButtonModuleViewController
 - (void)buttonTapped:(id)sender {
-    // 判断当前点击的是不是放大器模块
     if ([self respondsToSelector:@selector(module)] && [[self valueForKey:@"module"] respondsToSelector:@selector(identifier)]) {
         NSString *identifier = [[self valueForKey:@"module"] valueForKey:@"identifier"];
         if ([identifier containsString:@"magnifier"] || [identifier containsString:@"Magnifier"]) {
             [[FloaterManager sharedInstance] toggleVisibility];
-            return; // 拦截，不调用原方法
+            return;
         }
     }
     %orig;
 }
 %end
-// =======================================================================
 
 __attribute__((constructor)) static void initFloater() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
