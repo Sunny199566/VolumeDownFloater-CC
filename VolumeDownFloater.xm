@@ -21,11 +21,15 @@ void simulateVolumeDown(void) {
         IOHIDEventSystemClientRef client = createClient(kCFAllocatorDefault);
         if (client) {
             uint64_t timestamp = mach_absolute_time();
+            
             IOHIDEventRef downEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, true, 0);
             if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
+            
             usleep(50000);
+            
             IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, false, 0);
             if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
+            
             CFRelease(client);
         }
     }
@@ -68,7 +72,7 @@ void simulateVolumeDown(void) {
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES; // 默认隐藏，由 App 开关控制
+        self.window.hidden = YES; // 默认隐藏
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
