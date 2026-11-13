@@ -7,5 +7,6 @@ include $(THEOS)/makefiles/common.mk
 APPLICATION_NAME = VolumeSwitch
 VolumeSwitch_FILES = main.m
 VolumeSwitch_FRAMEWORKS = UIKit
+VolumeSwitch_INFOPLIST_FILE = Info.plist
 
 include $(THEOS_MAKE_PATH)/application.mk
