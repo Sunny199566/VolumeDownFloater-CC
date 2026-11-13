@@ -35,7 +35,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 + (instancetype)sharedInstance;
 - (void)setup;
-- (void)updateVisibility;
+- (void)setVisibility:(BOOL)visible;
 @end
 
 @implementation FloaterManager
@@ -65,7 +65,7 @@ void simulateVolumeDown(void) {
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES;
+        self.window.hidden = YES; // 默认隐藏
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
@@ -81,16 +81,14 @@ void simulateVolumeDown(void) {
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
-        
-        [self updateVisibility];
     });
 }
 
-- (void)updateVisibility {
-    Boolean keyExists = NO;
-    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), CFSTR("com.yourname.volumedownfloater"), &keyExists);
-    if (!keyExists) { enabled = NO; }
-    self.window.hidden = !enabled;
+// 接收来自 App 的显示/隐藏指令
+- (void)setVisibility:(BOOL)visible {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.window.hidden = !visible;
+    });
 }
 
 - (void)btnTapped {
@@ -122,8 +120,11 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// 接收带数据的通知
 static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] updateVisibility]; });
+    NSString *stateStr = (__bridge NSString *)object;
+    BOOL visible = [stateStr isEqualToString:@"1"];
+    [[FloaterManager sharedInstance] setVisibility:visible];
 }
 
 __attribute__((constructor)) static void initFloater() {
