@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import "VolumeDownFloaterPrefs.h"
 
 // 底层 HID 事件定义
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -22,15 +21,11 @@ void simulateVolumeDown(void) {
         IOHIDEventSystemClientRef client = createClient(kCFAllocatorDefault);
         if (client) {
             uint64_t timestamp = mach_absolute_time();
-            
             IOHIDEventRef downEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, true, 0);
             if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
-            
             usleep(50000);
-            
             IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, false, 0);
             if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
-            
             CFRelease(client);
         }
     }
@@ -41,8 +36,6 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) UINotificationFeedbackGenerator *notifyGenerator;
-@property (nonatomic, assign) BOOL isActive; 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)updateVisibility;
@@ -65,7 +58,6 @@ void simulateVolumeDown(void) {
         }
         
         CGFloat btnSize = 60.0;
-        
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
@@ -76,15 +68,10 @@ void simulateVolumeDown(void) {
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES; // 默认隐藏，由控制中心开关决定
+        self.window.hidden = YES; // 默认隐藏，由 App 开关控制
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
-        
-        self.notifyGenerator = [[UINotificationFeedbackGenerator alloc] init];
-        [self.notifyGenerator prepare];
-        
-        self.isActive = YES;
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = self.window.rootViewController.view.bounds;
@@ -94,11 +81,6 @@ void simulateVolumeDown(void) {
         [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
         
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
-        
-        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-        longPress.minimumPressDuration = 0.5;
-        [self.floatBtn addGestureRecognizer:longPress];
-        
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
@@ -109,46 +91,17 @@ void simulateVolumeDown(void) {
 
 - (void)updateVisibility {
     Boolean keyExists = NO;
-    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), (__bridge CFStringRef)kVolumeDownPrefsDomain, &keyExists);
+    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), CFSTR("com.yourname.volumedownfloater"), &keyExists);
     if (!keyExists) { enabled = NO; }
     self.window.hidden = !enabled;
 }
 
 - (void)btnTapped {
-    if (self.window.hidden || !self.isActive) return;
+    if (self.window.hidden) return;
 
     [self.hapticGenerator impactOccurred];
     [self.hapticGenerator prepare]; 
     simulateVolumeDown();
-}
-
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        self.isActive = !self.isActive;
-        
-        CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-        
-        [UIView animateWithDuration:0.3 animations:^{
-            if (self.isActive) {
-                self.window.frame = CGRectMake(self.window.frame.origin.x, self.window.frame.origin.y, 60.0, 60.0);
-                self.floatBtn.layer.cornerRadius = 30.0;
-                self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
-                [self.floatBtn setTitle:@"音量-" forState:UIControlStateNormal];
-                [self.notifyGenerator notificationOccurred:UINotificationFeedbackTypeSuccess];
-            } else {
-                CGFloat smallSize = 12.0;
-                CGFloat newX = screenWidth - smallSize - 2;
-                CGFloat newY = self.window.center.y;
-                
-                self.window.frame = CGRectMake(newX, newY - smallSize/2, smallSize, smallSize);
-                self.floatBtn.layer.cornerRadius = smallSize / 2.0;
-                self.floatBtn.backgroundColor = [UIColor colorWithWhite:0.7 alpha:0.3];
-                [self.floatBtn setTitle:@"" forState:UIControlStateNormal];
-                [self.notifyGenerator notificationOccurred:UINotificationFeedbackTypeWarning];
-            }
-        }];
-        [self.notifyGenerator prepare];
-    }
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
@@ -178,6 +131,6 @@ static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStrin
 }
 
 __attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR(kVolumeDownToggleNotification), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR("com.yourname.volumedownfloater/toggle"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
