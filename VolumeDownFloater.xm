@@ -2,7 +2,6 @@
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 
-// 底层 HID 事件定义
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
@@ -36,7 +35,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 + (instancetype)sharedInstance;
 - (void)setup;
-- (void)toggleVisibility;
+- (void)updateVisibility;
 @end
 
 @implementation FloaterManager
@@ -66,7 +65,7 @@ void simulateVolumeDown(void) {
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [UIViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES; // 默认隐藏
+        self.window.hidden = YES;
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
@@ -82,19 +81,16 @@ void simulateVolumeDown(void) {
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
+        
+        [self updateVisibility];
     });
 }
 
-- (void)toggleVisibility {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.window.hidden = !self.window.hidden;
-        UINotificationFeedbackGenerator *gen = [[UINotificationFeedbackGenerator alloc] init];
-        if (self.window.hidden) {
-            [gen notificationOccurred:UINotificationFeedbackTypeWarning];
-        } else {
-            [gen notificationOccurred:UINotificationFeedbackTypeSuccess];
-        }
-    });
+- (void)updateVisibility {
+    Boolean keyExists = NO;
+    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), CFSTR("com.yourname.volumedownfloater"), &keyExists);
+    if (!keyExists) { enabled = NO; }
+    self.window.hidden = !enabled;
 }
 
 - (void)btnTapped {
@@ -126,36 +122,11 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// ================= 核心修复：欺骗编译器，告诉它这俩类是 UIViewController =================
-@interface CCUIButtonModuleViewController : UIViewController
-@end
-
-@interface CCUIMagnifierModule : CCUIButtonModuleViewController
-@end
-// =======================================================================================
-
-%hook CCUIMagnifierModule
-
-- (void)buttonTapped:(id)sender {
-    [[FloaterManager sharedInstance] toggleVisibility];
-    // 不调用 %orig; 彻底拦截放大器原本的启动行为
+static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] updateVisibility]; });
 }
-
-%end
-
-%hook CCUIButtonModuleViewController
-- (void)buttonTapped:(id)sender {
-    if ([self respondsToSelector:@selector(module)] && [[self valueForKey:@"module"] respondsToSelector:@selector(identifier)]) {
-        NSString *identifier = [[self valueForKey:@"module"] valueForKey:@"identifier"];
-        if ([identifier containsString:@"magnifier"] || [identifier containsString:@"Magnifier"]) {
-            [[FloaterManager sharedInstance] toggleVisibility];
-            return;
-        }
-    }
-    %orig;
-}
-%end
 
 __attribute__((constructor)) static void initFloater() {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsChanged, CFSTR("com.yourname.volumedownfloater/toggle"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
