@@ -30,21 +30,16 @@ jobs:
         run: |
           cd SwitchApp
           make clean
-          make
+          make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
           
-          # 暴力手动组装 IPA 结构
-          mkdir -p Payload/VolumeSwitch.app
+          # 解包生成的 deb，提取完美的 app
+          mkdir -p extracted
+          dpkg-deb -x packages/*.deb extracted/
           
-          # 1. 强制把 Info.plist 放进去
-          cp Info.plist Payload/VolumeSwitch.app/
+          mkdir -p Payload
+          find extracted -name "*.app" -type d -exec cp -R {} Payload/ \;
           
-          # 2. 找到编译好的可执行文件，拷进去
-          find .theos -name "VolumeSwitch" -type f -exec cp {} Payload/VolumeSwitch.app/ \;
-          
-          # 3. 赋予执行权限
-          chmod +x Payload/VolumeSwitch.app/VolumeSwitch
-          
-          # 4. 重新打包成 IPA
+          # 打包成最终 IPA
           zip -r VolumeSwitch.ipa Payload
 
       - name: Upload Deb
