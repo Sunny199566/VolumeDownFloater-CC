@@ -2,8 +2,8 @@ Package: com.yourname.volumedownfloater
 Name: VolumeDownFloater
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: 音量减悬浮球，带控制中心开关
+Description: 音量减悬浮球
 Maintainer: You
 Author: You
 Section: Tweaks
-Depends: mobilesubstrate, firmware (>= 14.0), com.opa334.ccsupport
+Depends: mobilesubstrate
