@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -45,7 +46,10 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) float hapticIntensity; 
+@property (nonatomic, assign) float hapticDuration;
+@property (nonatomic, assign) BOOL isCustomHaptic;
 @property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -81,7 +85,17 @@ void simulateVolumeDown(void) {
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
 
-        self.hapticIntensity = 0.8;
+        self.hapticIntensity = 1.0;
+        self.hapticDuration = 160.0;
+        self.isCustomHaptic = NO;
+
+        if (@available(iOS 13.0, *)) {
+            if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
+                NSError *error = nil;
+                self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
+                [self.hapticEngine startAndReturnError:&error];
+            }
+        }
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -151,6 +165,12 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
         if (hapticStr.length > 0) self.hapticIntensity = [hapticStr floatValue];
+
+        NSString *durStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" encoding:NSUTF8StringEncoding error:nil];
+        if (durStr.length > 0) self.hapticDuration = [durStr floatValue];
+        
+        NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
+        self.isCustomHaptic = [customStr isEqualToString:@"1"];
 
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
         CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
@@ -240,37 +260,44 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 核心：超强震动连击逻辑
+// 核心：高级震动触发
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
     if (@available(iOS 13.0, *)) {
-        if (self.hapticIntensity >= 0.85) {
-            // 终极暴击：纯原生 Heavy + 极短二连击
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-            [gen prepare];
-            [gen impactOccurred]; // 第一下原生满血
+        if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
+            // 使用 CoreHaptics 精准控制时长和强度
+            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticIntensity];
+            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
             
-            // 0.06秒后补第二下，模拟物理撞击的余震，强度拉满
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-                [gen2 impactOccurred];
-            });
-        } else {
-            // 普通区间保持线性调节
-            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-            if (self.hapticIntensity < 0.3) {
-                style = UIImpactFeedbackStyleLight;
-            } else if (self.hapticIntensity > 0.6) {
-                style = UIImpactFeedbackStyleHeavy;
+            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.hapticDuration / 1000.0)];
+            
+            NSError *error = nil;
+            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+            if (!error) {
+                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
+                if (!error) {
+                    [player startAtTime:0 error:&error];
+                }
             }
+        } else {
+            // 传统极强连击模式
+            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+            if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
+            else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
+            
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
             [gen prepare];
             [gen impactOccurredWithIntensity:self.hapticIntensity];
+            
+            // 如果拉满，加个余震
+            if (self.hapticIntensity >= 0.85) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+                    [gen2 impactOccurred];
+                });
+            }
         }
-    } else {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [gen impactOccurred];
     }
     
     simulateVolumeDown();
