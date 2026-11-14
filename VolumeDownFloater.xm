@@ -1,8 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <objc/runtime.h>
-#import <objc/message.h>
 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -53,7 +51,6 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isHiddenState; 
 
 @property (strong, nonatomic) NSTimer *timeTimer;
-@property (strong, nonatomic) NSTimer *orientationTimer; 
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
@@ -162,77 +159,68 @@ void simulateVolumeDown(void) {
         }
         self.window.center = CGPointMake(px, py);
 
-        // 启动最安全的系统界面方向只读轮询
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkSystemOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
 
-// 极其安全的系统界面方向探测法（不挂监听，只读属性）
-- (void)checkSystemOrientation {
-    if (self.window.hidden || self.isHiddenState) return;
-    
-    long long sysOrientation = 1; // 默认竖屏
-    
-    // 通过运行时动态获取 FBS 方向，不初始化 Observer，防止崩溃
-    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
-    if (FBSClass) {
-        id observer = [[FBSClass alloc] init];
-        SEL sel = NSSelectorFromString(@"activeOrientation");
-        if ([observer respondsToSelector:sel]) {
-            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
-        }
-    } else {
-        // 如果 FBS 失效，退回传统的 Scene 宽高判定
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *activeScene = (UIWindowScene *)scene;
-                CGRect bounds = activeScene.coordinateSpace.bounds;
-                if (bounds.size.width > bounds.size.height) sysOrientation = 3; // 强行当作横屏
-            }
-        }
-    }
-
-    CGFloat targetAngle = 0;
-    if (sysOrientation == 3) {
-        targetAngle = M_PI_2;
-    } else if (sysOrientation == 4) {
-        targetAngle = -M_PI_2;
-    } else {
-        targetAngle = 0;
-    }
-
-    if (fabs(self.currentAngle - targetAngle) > 0.1) {
-        self.currentAngle = targetAngle;
-        [UIView animateWithDuration:0.3 animations:^{
-            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
-        }];
-    }
-}
-
+// 长按：弹出控制菜单
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
         
-        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
-        CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+        // 弹出系统原生菜单，居中显示，绝不影响游戏体验
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"悬浮球控制" message:nil preferredStyle:UIAlertControllerStyleAlert];
         
-        if (!self.isHiddenState) {
-            self.isHiddenState = YES;
-            [UIView animateWithDuration:0.3 animations:^{
-                self.floatBtn.alpha = 0.02; 
-            }];
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            [gen impactOccurred];
+        // 选项1：旋转
+        [alert addAction:[UIAlertAction actionWithTitle:@"旋转 90 度" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [self rotate90];
+        }]];
+        
+        // 选项2：隐藏/恢复
+        if (self.isHiddenState) {
+            [alert addAction:[UIAlertAction actionWithTitle:@"恢复显示" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                [self restoreAlpha];
+            }]];
         } else {
-            self.isHiddenState = NO;
-            [UIView animateWithDuration:0.3 animations:^{
-                self.floatBtn.alpha = normalAlpha;
-            }];
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            [gen impactOccurred];
+            [alert addAction:[UIAlertAction actionWithTitle:@"临时隐身" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+                [self hideAlpha];
+            }]];
         }
+        
+        // 选项3：取消
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
     }
+}
+
+// 旋转动画
+- (void)rotate90 {
+    self.currentAngle += M_PI_2;
+    if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
+    [UIView animateWithDuration:0.3 animations:^{
+        self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+    }];
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [gen impactOccurred];
+}
+
+// 隐藏动画
+- (void)hideAlpha {
+    self.isHiddenState = YES;
+    [UIView animateWithDuration:0.3 animations:^{
+        self.floatBtn.alpha = 0.02;
+    }];
+}
+
+// 恢复显示动画
+- (void)restoreAlpha {
+    self.isHiddenState = NO;
+    NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
+    CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+    [UIView animateWithDuration:0.3 animations:^{
+        self.floatBtn.alpha = normalAlpha;
+    }];
 }
 
 - (void)updateUI {
