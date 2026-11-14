@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -41,6 +43,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (strong, nonatomic) id fbsObserver;
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -103,44 +106,47 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 核心逻辑：每隔 0.5 秒轮询一次当前界面的真实方向（UI）
-        [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkInterfaceOrientation) userInfo:nil repeats:YES];
+        // 核心大招：使用系统的 FBSOrientationObserver 监听真实的界面方向
+        [self setupFBSObserver];
     });
 }
 
-// 纯界面判定法：只看界面，不看重力！
-- (void)checkInterfaceOrientation {
-    if (self.window.hidden) return;
-    
-    UIInterfaceOrientation currentOrientation = UIInterfaceOrientationPortrait;
-    
-    // 1. 获取系统的界面方向
-    if (@available(iOS 13.0, *)) {
-        if (self.window.windowScene) {
-            currentOrientation = self.window.windowScene.interfaceOrientation;
+- (void)setupFBSObserver {
+    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+    if (FBSClass) {
+        self.fbsObserver = [[FBSClass alloc] init];
+        
+        // 监听方向变化的回调
+        void (^handler)(long long, double, double) = ^(long long orientation, double rotation, double transition) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self applyFBSOrientation:orientation];
+            });
+        };
+        
+        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"setHandler:")]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"setHandler:"), handler);
         }
-    } else {
-        currentOrientation = [UIApplication sharedApplication].statusBarOrientation;
+        
+        // 启动时先主动获取一次当前方向
+        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"activeOrientation")]) {
+            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
+            [self applyFBSOrientation:currentOri];
+        }
     }
-    
-    // 2. 兜底逻辑：如果游戏强制横屏但 Scene 没刷新，通过宽高比判断
-    CGRect bounds = self.window.windowScene.coordinateSpace.bounds;
-    if (bounds.size.width > bounds.size.height && UIInterfaceOrientationIsPortrait(currentOrientation)) {
-        // 宽度大于高度，绝对是横屏了
-        currentOrientation = UIInterfaceOrientationLandscapeRight;
-    }
+}
 
-    // 3. 根据界面方向计算文字角度
+// FBSOrientation 的枚举值：1=竖屏，2=倒置，3=左横，4=右横
+- (void)applyFBSOrientation:(long long)orientation {
     CGFloat targetAngle = 0;
-    if (currentOrientation == UIInterfaceOrientationLandscapeLeft) {
-        targetAngle = M_PI_2;
-    } else if (currentOrientation == UIInterfaceOrientationLandscapeRight) {
-        targetAngle = -M_PI_2;
+    
+    if (orientation == 3) {
+        targetAngle = M_PI_2;   // 左横
+    } else if (orientation == 4) {
+        targetAngle = -M_PI_2;  // 右横
     } else {
-        targetAngle = 0; // 竖屏
+        targetAngle = 0;        // 竖屏
     }
     
-    // 4. 平滑旋转
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -163,8 +169,9 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self checkInterfaceOrientation];
+        if (visible && self.fbsObserver) {
+            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
+            [self applyFBSOrientation:currentOri];
         }
     });
 }
