@@ -50,7 +50,6 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 @property (nonatomic, assign) BOOL isHiddenState; 
 
-// 独立的全屏菜单窗口
 @property (strong, nonatomic) UIWindow *menuWindow;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
@@ -165,7 +164,6 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 长按：触发独立的全屏菜单
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -173,7 +171,7 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 核心修复：新建一个独立的、全屏的 UIWindow 来承载菜单，彻底解决点击无效的问题
+// 菜单紧贴悬浮球，且有极严的防出界保护
 - (void)showCustomMenu {
     if (self.menuWindow) {
         [self hideMenu];
@@ -187,28 +185,58 @@ void simulateVolumeDown(void) {
         self.menuWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
     
-    // 窗口设为全屏大小，这样无论点哪里都能感应到
-    self.menuWindow.frame = [UIScreen mainScreen].bounds;
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
+    
+    self.menuWindow.frame = CGRectMake(0, 0, maxDim, maxDim);
+    self.menuWindow.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
+    
     self.menuWindow.windowLevel = UIWindowLevelAlert + 3000;
-    self.menuWindow.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.menuWindow.backgroundColor = [UIColor clearColor];
     
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.menuWindow.rootViewController = vc;
     self.menuWindow.hidden = NO;
     
-    // 点击黑色遮罩空白处取消
+    // 遮罩，绝不旋转
+    UIView *maskView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, maxDim, maxDim)];
+    maskView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+    
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(actionCancel)];
-    [vc.view addGestureRecognizer:tap];
+    [maskView addGestureRecognizer:tap];
 
-    // 创建卡片
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 160)];
     card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     card.layer.cornerRadius = 12;
-    card.center = CGPointMake(self.menuWindow.bounds.size.width / 2.0, self.menuWindow.bounds.size.height / 2.0);
     
-    // 如果悬浮球是横屏状态，让卡片也跟着转，保证文字阅读方向正确
-    card.transform = CGAffineTransformMakeRotation(self.currentAngle);
+    // ==========================================
+    // 核心计算：菜单紧贴悬浮球，且绝对不出界
+    // ==========================================
+    // 以悬浮球在屏幕上的实际物理坐标作为中心参考
+    CGFloat ballX = self.window.center.x;
+    CGFloat ballY = self.window.center.y;
+    
+    // 为了让菜单不把球完全盖住，我们在垂直方向偏移一点（比如球在下面，菜单就往上弹）
+    CGFloat cardX = ballX;
+    CGFloat cardY = ballY - 120; // 默认弹在球上方
+    
+    // 如果球太靠上了，就弹在球下方
+    if (cardY < 100) {
+        cardY = ballY + 120;
+    }
+    
+    // 限制不超出屏幕物理边界
+    CGFloat minX = 110; // 卡片宽度一半 + 边距
+    CGFloat maxX = maxDim - 110;
+    if (ballX > screenBounds.size.width) {
+        minX = screenBounds.size.height - 110; // 如果球横过来了
+    }
+    
+    cardX = MAX(110, MIN(cardX, maxDim - 110));
+    cardY = MAX(110, MIN(cardY, maxDim - 110));
+    
+    card.center = CGPointMake(cardX, cardY);
     
     // 1. 旋转
     UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -245,7 +273,8 @@ void simulateVolumeDown(void) {
     [cancelBtn addTarget:self action:@selector(actionCancel) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:cancelBtn];
     
-    [vc.view addSubview:card];
+    [maskView addSubview:card];
+    [vc.view addSubview:maskView];
 }
 
 - (void)actionRotate {
