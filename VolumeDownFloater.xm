@@ -79,14 +79,12 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
-        // 核心修复：使用 2000x2000 的大窗口，但要配合正确的中心点和拖拽逻辑
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
-        // 窗口正中心对准屏幕正中心
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
         self.window.windowLevel = UIWindowLevelAlert + 2000;
@@ -94,7 +92,6 @@ void simulateVolumeDown(void) {
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        // 强制显示，防止各种隐藏通知卡住
         self.window.hidden = NO; 
 
         self.hapticIntensity = 1.0;
@@ -114,7 +111,6 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        // 球永远固定在 2000x2000 窗口的绝对正中心 (1000, 1000)
         self.mainContainer.center = CGPointMake(1000, 1000);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
@@ -348,15 +344,30 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 终极拖拽：直接移动 Window，无视系统截断！
+// 终极拖拽 + 物理坐标系映射修正
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:pan.view];
         
-        // 我们直接移动整个巨大的 Window
-        CGPoint newWindowCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+        CGPoint realTranslation = translation;
+        
+        // 核心修复：如果在横屏状态，需要把手指的滑动方向映射到真实的系统坐标系里
+        if (fabs(self.currentAngle) > 1.0) {
+            if (self.currentAngle > 0) {
+                // 顺时针 90 度
+                realTranslation.x = translation.y;
+                realTranslation.y = -translation.x;
+            } else {
+                // 逆时针 90 度
+                realTranslation.x = -translation.y;
+                realTranslation.y = translation.x;
+            }
+        }
+        
+        // 直接移动整个 Window
+        CGPoint newWindowCenter = CGPointMake(self.window.center.x + realTranslation.x, self.window.center.y + realTranslation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
@@ -367,33 +378,11 @@ void simulateVolumeDown(void) {
         CGFloat maxW = MAX(screenW, screenH);
         CGFloat minW = MIN(screenW, screenH);
         
-        // 物理屏幕可视区的宽度/高度
         CGFloat visualW = isRotated ? maxW : minW;
         CGFloat visualH = isRotated ? minW : maxW;
         
-        // 球的实际尺寸（考虑旋转）
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
-        
-        // 限制 Window 中心点的位置，让球死死卡在屏幕边缘
-        // 球在 2000x2000 窗口的正中心，所以窗口中心就是球的中心
-        CGFloat minX = visualW / 2.0 + ballW / 2.0 + 5.0;
-        CGFloat maxX = screenW - visualW / 2.0 - ballW / 2.0 - 5.0;
-        
-        // 如果是横屏，可视区域是 maxW，那么边界计算就变了
-        if (isRotated) {
-            minX = visualW / 2.0 + ballW / 2.0 + 5.0;
-            maxX = screenW - visualW / 2.0 - ballW / 2.0 - 5.0;
-            // 实际上横屏时，窗口往右移，视觉上就是往右移
-        }
-        
-        // 对于 Y 轴，直接使用屏幕的真实高度进行限制
-        CGFloat minY = visualH / 2.0 + ballH / 2.0 + 20.0;
-        CGFloat maxY = screenH - visualH / 2.0 - ballH / 2.0 - 10.0;
-        
-        // 算出允许的 Window 中心点范围（基于屏幕）
-        // 其实更简单的做法是：我们直接限制 mainContainer 在屏幕内的视觉位置
-        // 但因为现在拖的是 Window，所以 Window 中心必须位于 [minX, maxX]
         
         CGFloat realMinX = ballW / 2.0 + 10.0;
         CGFloat realMaxX = screenW - ballW / 2.0 - 10.0;
@@ -402,9 +391,9 @@ void simulateVolumeDown(void) {
         
         if (isRotated) {
             realMinX = ballW / 2.0 + 10.0;
-            realMaxX = screenH - ballW / 2.0 - 10.0; // 横屏时宽度变成了屏幕高度
+            realMaxX = screenH - ballW / 2.0 - 10.0; 
             realMinY = ballH / 2.0 + 20.0;
-            realMaxY = screenW - ballH / 2.0 - 10.0; // 横屏时高度变成了屏幕宽度
+            realMaxY = screenW - ballH / 2.0 - 10.0; 
         }
         
         newWindowCenter.x = MAX(realMinX, MIN(newWindowCenter.x, realMaxX));
