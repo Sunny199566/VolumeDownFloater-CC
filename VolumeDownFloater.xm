@@ -38,14 +38,14 @@ void simulateVolumeDown(void) {
 
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
-@property (strong, nonatomic) UITextField *secureContainer; 
-@property (strong, nonatomic) UIView *mainContainer; 
+@property (strong, nonatomic) UIView *mainContainer; // 整体旋转容器
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;       
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 @property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) float hapticIntensity; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 
 + (instancetype)sharedInstance;
@@ -87,24 +87,16 @@ void simulateVolumeDown(void) {
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
 
+        self.hapticIntensity = 0.8;
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // ====== 黑魔法：创建一个透明的密码框作为底层容器 ======
-        self.secureContainer = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
-        self.secureContainer.secureTextEntry = YES;
-        // 核心修复：必须有文本，系统才会渲染它的安全层！
-        self.secureContainer.text = @"HiddenForScreenshot"; 
-        self.secureContainer.userInteractionEnabled = NO; // 关闭自身交互，防止挡住点击
-        self.secureContainer.backgroundColor = [UIColor clearColor];
-        [self.window.rootViewController.view addSubview:self.secureContainer];
-
-        // ====== 整体旋转容器 ======
+        // 整体旋转容器
         self.mainContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        [self.window.rootViewController.view addSubview:self.mainContainer]; // 挂载到Window上，防止交互被吞
+        [self.window.rootViewController.view addSubview:self.mainContainer];
 
-        // ====== 1. 创建球体 ======
+        // 球体
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
@@ -135,7 +127,7 @@ void simulateVolumeDown(void) {
         self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
-        // ====== 2. 创建球体下方的时间 ======
+        // 底部时间
         self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, btnSize + 2, btnSize, 20)];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
@@ -154,13 +146,14 @@ void simulateVolumeDown(void) {
 
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 读取防截图开关
-        NSString *securePath = @"/var/mobile/Library/Preferences/volumefloater_secure.txt";
-        NSString *secureStr = [NSString stringWithContentsOfFile:securePath encoding:NSUTF8StringEncoding error:nil];
-        BOOL secureOn = [secureStr isEqualToString:@"1"];
-        self.secureContainer.secureTextEntry = secureOn;
+        // 1. 震动强度
+        NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
+        NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
+        if (hapticStr && hapticStr.length > 0) {
+            self.hapticIntensity = [hapticStr floatValue];
+        }
 
-        // 2. 读取图片
+        // 2. 图片
         NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
         if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
             self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
@@ -171,7 +164,7 @@ void simulateVolumeDown(void) {
             self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         }
         
-        // 3. 处理时间开关
+        // 3. 时间
         NSString *timePath = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
         NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
@@ -187,7 +180,7 @@ void simulateVolumeDown(void) {
             self.timeBottomLabel.hidden = YES;
         }
         
-        // 4. 读取内部文字
+        // 4. 文字
         NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
         NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
         if (!title || title.length == 0) {
@@ -204,6 +197,7 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
+// 长按旋转（整体旋转，绝不错位）
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
@@ -226,9 +220,15 @@ void simulateVolumeDown(void) {
     });
 }
 
+// 单击触发自定义强度震动
 - (void)btnTapped {
     if (self.window.hidden) return;
-    [self.hapticGenerator impactOccurred];
+    
+    if (@available(iOS 13.0, *)) {
+        [self.hapticGenerator impactOccurredWithIntensity:self.hapticIntensity];
+    } else {
+        [self.hapticGenerator impactOccurred];
+    }
     [self.hapticGenerator prepare]; 
     simulateVolumeDown();
 }
