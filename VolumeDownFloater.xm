@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -41,6 +43,11 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+
+// 核心修复：用属性强引用住这个观察者和代码块，防止被系统提前释放导致崩溃
+@property (strong, nonatomic) id fbsObserver;
+@property (copy, nonatomic) void (^fbsHandler)(long long, double, double);
+
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -103,35 +110,48 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 核心大招：通过检测当前前台 App 的界面尺寸来判断横竖屏
-        [NSTimer scheduledTimerWithTimeInterval:0.2 target:self selector:@selector(checkUISize) userInfo:nil repeats:YES];
+        // 开启系统底层的方向监听
+        [self setupFBSObserver];
     });
 }
 
-// 最安全的判定法：完全不依赖私有API，不依赖重力感应
-- (void)checkUISize {
-    if (self.window.hidden) return;
-    
-    BOOL isLandscape = NO;
-    
-    if (@available(iOS 13.0, *)) {
-        // 获取当前处于活跃状态的前台场景（比如王者荣耀全屏时的场景）
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *activeScene = (UIWindowScene *)scene;
-                CGRect bounds = activeScene.coordinateSpace.bounds;
-                // 如果界面的宽度大于高度，说明绝对是全屏横屏状态
-                if (bounds.size.width > bounds.size.height) {
-                    isLandscape = YES;
-                }
-                break;
-            }
+- (void)setupFBSObserver {
+    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+    if (FBSClass) {
+        self.fbsObserver = [[FBSClass alloc] init];
+        
+        // 修复崩溃点：把 Block 存入 self 的属性中，让它一直存活！
+        __weak typeof(self) weakSelf = self;
+        self.fbsHandler = ^(long long orientation, double rotation, double transition) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf applyFBSOrientation:orientation];
+            });
+        };
+        
+        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"setHandler:")]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"setHandler:"), self.fbsHandler);
+        }
+        
+        // 启动时主动同步一次方向
+        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"activeOrientation")]) {
+            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
+            [self applyFBSOrientation:currentOri];
         }
     }
+}
+
+// FBS 的方向值：1=竖屏，2=倒置，3=左横，4=右横
+- (void)applyFBSOrientation:(long long)orientation {
+    CGFloat targetAngle = 0;
     
-    CGFloat targetAngle = isLandscape ? -M_PI_2 : 0;
+    if (orientation == 3) {
+        targetAngle = M_PI_2;   // 左横屏
+    } else if (orientation == 4) {
+        targetAngle = -M_PI_2;  // 右横屏
+    } else {
+        targetAngle = 0;        // 竖屏
+    }
     
-    // 平滑过渡
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -154,8 +174,9 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self checkUISize];
+        if (visible && self.fbsObserver) {
+            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
+            [self applyFBSOrientation:currentOri];
         }
     });
 }
