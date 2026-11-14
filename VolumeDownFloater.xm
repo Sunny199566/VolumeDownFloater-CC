@@ -243,7 +243,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 拖动逻辑（带磁吸和记忆）
+// 拖动逻辑（已删除磁吸功能，只保留位置记忆）
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -270,19 +270,12 @@ void simulateVolumeDown(void) {
     self.window.center = newCenter;
     [pan setTranslation:CGPointZero inView:self.window];
 
-    // 核心新增：松手时磁吸边缘并保存坐标
+    // 松手时只保存坐标，不再磁吸
     if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        CGFloat targetX = (self.window.center.x < screenWidth / 2.0) ? minX : maxX;
-        
-        [UIView animateWithDuration:0.3 animations:^{
-            self.window.center = CGPointMake(targetX, self.window.center.y);
-        } completion:^(BOOL finished) {
-            // 记忆位置
-            NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-            NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
-            [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        }];
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+        [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
 }
 @end
