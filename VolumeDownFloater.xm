@@ -92,6 +92,9 @@ void simulateVolumeDown(void) {
         self.isCustomHaptic = NO;
         self.isHiddenState = NO;
 
+        // 开启设备物理方向通知
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -166,18 +169,28 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 终极破防：直接读取硬件物理分辨率
+// 双管齐下：宽高比决定是否横屏，重力决定正反
 - (void)checkPhysicalOrientation {
     if (self.window.hidden || self.isHiddenState) return;
     
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    
     CGFloat targetAngle = 0;
     
-    // 修复：将横屏角度改为顺时针旋转 (M_PI_2)，适配王者等主流游戏的横屏姿态
     if (screenSize.width > screenSize.height) {
-        targetAngle = M_PI_2; 
+        // 第一道关卡：宽大于高，说明绝对在横屏状态（游戏、全屏视频）
+        // 此时再读取重力方向，区分左横还是右横
+        UIDeviceOrientation deviceOri = [[UIDevice currentDevice] orientation];
+        
+        if (deviceOri == UIDeviceOrientationLandscapeLeft) {
+            targetAngle = M_PI_2; // 刚刚验证过正向的顺时针 90度
+        } else if (deviceOri == UIDeviceOrientationLandscapeRight) {
+            targetAngle = -M_PI_2; // 倒过来（逆时针 90度）
+        } else {
+            // 如果此时手机是平放（FaceUp/FaceDown），保持当前角度不变，防止乱跳
+            return; 
+        }
     } else {
+        // 第二道关卡：宽小于高，说明是竖屏。无视一切重力，死死锁住 0 度。
         targetAngle = 0;
     }
 
