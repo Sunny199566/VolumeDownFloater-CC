@@ -82,7 +82,6 @@ void simulateVolumeDown(void) {
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
-        // 2000x2000 的大窗口固定不动，只给内部容器提供足够的滑动空间
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
@@ -326,32 +325,18 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 终极修复：彻底解决竖屏阴影/不跟手，以及横屏卡中间的问题
+// 完美跟手原版：绝不加任何坐标转换
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        // 获取手指相对于 2000x2000 大窗口的位移
+        // 获取手指在当前 window 里的真实物理滑动量
         CGPoint translation = [pan translationInView:self.window];
         
-        // 关键修复：如果球是横着的（currentAngle != 0），必须将手指的物理方向做一次数学映射
-        CGPoint realTranslation = translation;
+        // 直接加到容器中心点上，系统底层已经帮我们把横屏的方向翻转好了
+        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
+        
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
-        
-        if (isRotated) {
-            if (self.currentAngle > 0) {
-                // 顺时针 90 度
-                realTranslation.x = translation.y;
-                realTranslation.y = -translation.x;
-            } else {
-                // 逆时针 90 度
-                realTranslation.x = -translation.y;
-                realTranslation.y = translation.x;
-            }
-        }
-        
-        // 把映射后的位移直接加到 mainContainer 的中心点上
-        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + realTranslation.x, self.mainContainer.center.y + realTranslation.y);
         
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         CGFloat screenW = screenBounds.size.width;
@@ -360,19 +345,19 @@ void simulateVolumeDown(void) {
         CGFloat maxW = MAX(screenW, screenH);
         CGFloat minW = MIN(screenW, screenH);
         
-        // 可视屏幕范围
+        // 可视屏幕的宽高
         CGFloat visualW = isRotated ? maxW : minW;
         CGFloat visualH = isRotated ? minW : maxW;
         
-        // 球尺寸
+        // 球的实际宽高
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 2000x2000 大窗口，可视中心是 (1000, 1000)
+        // 在 2000x2000 的窗口里，屏幕可视区域的中心依然是 (1000, 1000)
         CGFloat centerX = 1000;
         CGFloat centerY = 1000;
         
-        // 绝对边界限制，球绝不会飞出可视区
+        // 核心边界限制
         CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
         CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
         CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
