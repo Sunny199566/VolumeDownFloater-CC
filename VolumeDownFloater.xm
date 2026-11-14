@@ -50,7 +50,8 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 @property (nonatomic, assign) BOOL isHiddenState; 
 
-@property (strong, nonatomic) UIWindow *menuWindow;
+// 菜单相关
+@property (strong, nonatomic) UIView *menuView;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
@@ -171,48 +172,38 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 绝对居中，抛弃一切乱七八糟的坐标计算
+// 终极防乱转：不建新窗口，直接在当前窗口画遮罩
 - (void)showCustomMenu {
-    if (self.menuWindow) {
+    if (self.menuView) {
         [self hideMenu];
         return;
     }
     
-    UIWindowScene *windowScene = self.window.windowScene;
-    if (@available(iOS 13.0, *)) {
-        self.menuWindow = [[UIWindow alloc] initWithWindowScene:windowScene];
-    } else {
-        self.menuWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    }
-    
-    // 取最大的尺寸作为正方形
+    // 取屏幕最大物理尺寸，确保横竖屏都能铺满
     CGRect screenBounds = [UIScreen mainScreen].bounds;
     CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
     
-    self.menuWindow.frame = CGRectMake(0, 0, maxDim, maxDim);
-    self.menuWindow.windowLevel = UIWindowLevelAlert + 3000;
-    self.menuWindow.backgroundColor = [UIColor clearColor];
+    // 全屏遮罩直接盖在主窗口的 View 上
+    self.menuView = [[UIView alloc] initWithFrame:CGRectMake(-maxDim/2, -maxDim/2, maxDim*2, maxDim*2)];
+    self.menuView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
     
-    UIViewController *vc = [UIViewController new];
-    vc.view.backgroundColor = [UIColor clearColor];
-    self.menuWindow.rootViewController = vc;
-    self.menuWindow.hidden = NO;
+    // 因为底层 window 坐标系是锁死的，我们只要把遮罩的中心点对准屏幕正中间即可
+    self.menuView.center = CGPointMake(self.window.rootViewController.view.bounds.size.width / 2.0, self.window.rootViewController.view.bounds.size.height / 2.0);
     
-    // 遮罩，强制铺满并居中
-    UIView *maskView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, maxDim, maxDim)];
-    maskView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
-    // 强制居中
-    maskView.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
-    
+    // 让遮罩可以响应点击取消
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(actionCancel)];
-    [maskView addGestureRecognizer:tap];
+    [self.menuView addGestureRecognizer:tap];
 
+    // 菜单卡片
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 160)];
     card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     card.layer.cornerRadius = 12;
     
-    // 强制居中
-    card.center = CGPointMake(maxDim / 2.0, maxDim / 2.0);
+    // 卡片永远居中在遮罩正中间
+    card.center = CGPointMake(maxDim, maxDim); // 因为在 -maxDim/2 的基础上画，所以偏移到中心
+    
+    // 如果当前是横屏(游戏里)，我们把文字反向旋转一下，保证字是正对你的
+    card.transform = CGAffineTransformMakeRotation(-self.currentAngle);
     
     // 1. 旋转
     UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -249,8 +240,8 @@ void simulateVolumeDown(void) {
     [cancelBtn addTarget:self action:@selector(actionCancel) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:cancelBtn];
     
-    [maskView addSubview:card];
-    [vc.view addSubview:maskView];
+    [self.menuView addSubview:card];
+    [self.window.rootViewController.view addSubview:self.menuView];
 }
 
 - (void)actionRotate {
@@ -284,9 +275,9 @@ void simulateVolumeDown(void) {
 }
 
 - (void)hideMenu {
-    if (self.menuWindow) {
-        self.menuWindow.hidden = YES;
-        self.menuWindow = nil;
+    if (self.menuView) {
+        [self.menuView removeFromSuperview];
+        self.menuView = nil;
     }
 }
 
@@ -376,7 +367,7 @@ void simulateVolumeDown(void) {
 }
 
 - (void)handleTouchUpInside {
-    if (self.window.hidden || self.isHiddenState || self.menuWindow) return;
+    if (self.window.hidden || self.isHiddenState || self.menuView) return;
     
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
