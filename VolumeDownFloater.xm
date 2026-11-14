@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -48,18 +50,16 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticIntensity; 
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
-@property (strong, nonatomic) NSTimer *timeTimer;
-@property (strong, nonatomic) CHHapticEngine *hapticEngine;
+@property (nonatomic, assign) BOOL isHiddenState; 
 
-// 核心新增：边缘吸附状态
-@property (nonatomic, assign) BOOL isDocked;
-@property (nonatomic, assign) BOOL dockedToLeft;
+@property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateUI;
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
 @end
 
 @implementation FloaterManager
@@ -81,7 +81,7 @@ void simulateVolumeDown(void) {
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 80, 100)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 60, 85)]; }
         
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
@@ -92,7 +92,7 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
-        self.isDocked = NO;
+        self.isHiddenState = NO;
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -160,10 +160,75 @@ void simulateVolumeDown(void) {
                 py = savedY;
             }
         }
-        self.window.center = CGPointMake(px, py);
+        self.window.center = CGPoint(x: px, y: py);
 
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkSystemOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
+}
+
+- (void)checkSystemOrientation {
+    if (self.window.hidden || self.isHiddenState) return;
+    
+    long long sysOrientation = 1; 
+    
+    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+    if (FBSClass) {
+        id observer = [[FBSClass alloc] init];
+        SEL sel = NSSelectorFromString(@"activeOrientation");
+        if ([observer respondsToSelector:sel]) {
+            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
+        }
+    } else {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *activeScene = (UIWindowScene *)scene;
+                CGRect bounds = activeScene.coordinateSpace.bounds;
+                if (bounds.size.width > bounds.size.height) sysOrientation = 3;
+            }
+        }
+    }
+
+    CGFloat targetAngle = 0;
+    if (sysOrientation == 3) {
+        targetAngle = M_PI_2;
+    } else if (sysOrientation == 4) {
+        targetAngle = -M_PI_2;
+    } else {
+        targetAngle = 0;
+    }
+
+    if (fabs(self.currentAngle - targetAngle) > 0.1) {
+        self.currentAngle = targetAngle;
+        [UIView animateWithDuration:0.3 animations:^{
+            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        }];
+    }
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        [self.floatBtn cancelTrackingWithEvent:nil];
+        
+        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
+        CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+        
+        if (!self.isHiddenState) {
+            self.isHiddenState = YES;
+            [UIView animateWithDuration:0.3 animations:^{
+                self.floatBtn.alpha = 0.02; 
+            }];
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            [gen impactOccurred];
+        } else {
+            self.isHiddenState = NO;
+            [UIView animateWithDuration:0.3 animations:^{
+                self.floatBtn.alpha = normalAlpha;
+            }];
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            [gen impactOccurred];
+        }
+    }
 }
 
 - (void)updateUI {
@@ -186,15 +251,15 @@ void simulateVolumeDown(void) {
         NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
         if (colorStr.length == 0) colorStr = @"red";
 
-        // 窗口尺寸留余量，防止被裁剪
         CGFloat totalHeight = size + 25;
         CGPoint oldCenter = self.window.center;
-        self.window.frame = CGRectMake(oldCenter.x - size/2.0 - 10, oldCenter.y - totalHeight/2.0 - 10, size + 20, totalHeight + 20);
         
-        self.mainContainer.frame = CGRectMake(10, 10, size, totalHeight);
+        self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
+        
+        self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
-        self.floatBtn.alpha = alpha;
+        if (!self.isHiddenState) self.floatBtn.alpha = alpha;
         
         self.titleLabel.frame = self.floatBtn.bounds;
         self.titleLabel.font = [UIFont systemFontOfSize:size * 0.25 weight:UIFontWeightMedium];
@@ -245,62 +310,14 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        [self.floatBtn cancelTrackingWithEvent:nil];
-        
-        // 如果处于收纳状态，长按直接恢复并退出
-        if (self.isDocked) {
-            [self undock];
-            return;
-        }
-
-        self.currentAngle += M_PI_2;
-        if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
-        [UIView animateWithDuration:0.2 animations:^{
-            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
-        }];
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [gen impactOccurred];
-    }
-}
-
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
     });
 }
 
-// 边缘收纳动画
-- (void)dockToEdge {
-    self.isDocked = YES;
-    CGFloat offset = self.dockedToLeft ? -25.0 : 25.0;
-    [UIView animateWithDuration:0.3 animations:^{
-        self.mainContainer.transform = CGAffineTransformMakeTranslation(offset, 0);
-        self.floatBtn.alpha = 0.5; // 收纳时半透明
-    }];
-}
-
-// 解除收纳动画
-- (void)undock {
-    self.isDocked = NO;
-    [UIView animateWithDuration:0.3 animations:^{
-        self.mainContainer.transform = CGAffineTransformIdentity;
-        // 恢复原本的透明度
-        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
-        self.floatBtn.alpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
-    }];
-}
-
-// 点击
 - (void)handleTouchUpInside {
-    if (self.window.hidden) return;
-    
-    // 如果处于收纳状态，点一下只是弹出来，不执行脚本
-    if (self.isDocked) {
-        [self undock];
-        return;
-    }
+    if (self.window.hidden || self.isHiddenState) return;
     
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
@@ -336,10 +353,6 @@ void simulateVolumeDown(void) {
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
-        // 如果正在拖拽，先解除收纳状态
-        if (self.isDocked) {
-            [self undock];
-        }
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
         CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -355,10 +368,9 @@ void simulateVolumeDown(void) {
         CGFloat effWidth = isRotated ? windowHeight : windowWidth;
         CGFloat effHeight = isRotated ? windowWidth : windowHeight;
         
-        // 限制在屏幕内，防止拖飞
-        CGFloat minX = effWidth / 2.0;
-        CGFloat maxX = screenWidth - effWidth / 2.0;
-        CGFloat minY = effHeight / 2.0 + 10.0; 
+        CGFloat minX = effWidth / 2.0 + 10.0;
+        CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
+        CGFloat minY = effHeight / 2.0 + 20.0; 
         CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
@@ -367,26 +379,10 @@ void simulateVolumeDown(void) {
         self.window.center = newCenter;
         [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        // 保存位置
         NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
         NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        
-        // 检查是否贴近边缘并触发收纳
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenWidth = screenBounds.size.width;
-        
-        // 靠近左边缘 (小于 30 像素)
-        if (self.window.center.x < 30) {
-            self.dockedToLeft = YES;
-            [self dockToEdge];
-        } 
-        // 靠近右边缘
-        else if (self.window.center.x > screenWidth - 30) {
-            self.dockedToLeft = NO;
-            [self dockToEdge];
-        }
     }
 }
 @end
