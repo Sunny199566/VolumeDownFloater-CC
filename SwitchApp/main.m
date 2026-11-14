@@ -11,7 +11,7 @@
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    UIViewController *vc = [UIViewController new];
+    UIViewController *vc = [[UIViewController alloc] init];
     vc.view.backgroundColor = [UIColor systemBackgroundColor];
     self.window.rootViewController = vc;
     self.window.hidden = NO;
@@ -56,9 +56,13 @@
     self.titleTextField.placeholder = @"输入你想显示的文字";
     self.titleTextField.textAlignment = NSTextAlignmentCenter;
     
-    // 从全局配置读取文字
+    // 从全局配置读取文字 (非 ARC 安全写法)
+    NSString *currentTitle = @"音量-";
     CFStringRef titleRef = CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
-    NSString *currentTitle = titleRef ? (__bridge_transfer NSString *)titleRef : @"音量-";
+    if (titleRef) {
+        currentTitle = [NSString stringWithString:(__bridge NSString *)titleRef];
+        CFRelease(titleRef);
+    }
     self.titleTextField.text = currentTitle;
     
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
@@ -103,7 +107,6 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"timeState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    // 存入 CFPreferences
     CFPreferencesSetAppValue(CFSTR("showtime"), sender.isOn ? kCFBooleanTrue : kCFBooleanFalse, CFSTR("com.yourname.volumedownfloater"));
     CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
     
@@ -117,7 +120,6 @@
     NSString *newText = sender.text;
     if (newText.length == 0) newText = @" ";
     
-    // 存入 CFPreferences
     CFPreferencesSetAppValue(CFSTR("title"), (__bridge CFStringRef)newText, CFSTR("com.yourname.volumedownfloater"));
     CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
     
@@ -136,7 +138,6 @@
     
     UIImage *image = info[UIImagePickerControllerOriginalImage];
     if (image) {
-        // 压缩图片并转为 Base64 字符串存入 CFPreferences
         NSData *imgData = UIImageJPEGRepresentation(image, 0.8);
         NSString *base64String = [imgData base64EncodedStringWithOptions:0];
         
