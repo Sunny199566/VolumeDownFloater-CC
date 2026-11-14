@@ -203,18 +203,28 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 三段式混合震动测试
+// App 里的测试震动也同步加入极强二连击逻辑
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-        if (self.hapticSlider.value < 0.3) {
-            style = UIImpactFeedbackStyleLight;
-        } else if (self.hapticSlider.value > 0.7) {
-            style = UIImpactFeedbackStyleHeavy;
+        if (self.hapticSlider.value >= 0.85) {
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+            [gen prepare];
+            [gen impactOccurred];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+                [gen2 impactOccurred];
+            });
+        } else {
+            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+            if (self.hapticSlider.value < 0.3) {
+                style = UIImpactFeedbackStyleLight;
+            } else if (self.hapticSlider.value > 0.6) {
+                style = UIImpactFeedbackStyleHeavy;
+            }
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+            [gen prepare];
+            [gen impactOccurredWithIntensity:self.hapticSlider.value];
         }
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-        [gen prepare];
-        [gen impactOccurredWithIntensity:self.hapticSlider.value];
     }
 }
 
