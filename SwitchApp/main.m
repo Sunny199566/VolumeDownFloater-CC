@@ -72,7 +72,7 @@
     self.hapticSlider.maximumValue = 1.0;
     NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
     NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
-    self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 1.0; // 默认改成 100% 试试
+    self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 1.0;
     [self.hapticSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.hapticSlider];
 
@@ -203,10 +203,10 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 测试震动也改成 Heavy
+// 同步改成 Medium，让你在 App 里滑动时能感受到真实的强弱变化
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [gen impactOccurredWithIntensity:self.hapticSlider.value];
     }
 }
