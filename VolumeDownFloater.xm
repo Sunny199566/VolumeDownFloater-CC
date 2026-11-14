@@ -79,12 +79,13 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
+        // 采用 1000x1000 的超大安全窗口，绝对不会崩，且能突破横屏坐标限制
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 1000, 1000)]; }
         
-        self.window.frame = CGRectMake(0, 0, 2000, 2000);
+        self.window.frame = CGRectMake(0, 0, 1000, 1000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
         self.window.windowLevel = UIWindowLevelAlert + 2000;
@@ -111,7 +112,8 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        self.mainContainer.center = CGPointMake(1000, 1000);
+        // 永远放在 1000x1000 的正中心
+        self.mainContainer.center = CGPointMake(500, 500);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -344,56 +346,38 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 终极拖拽 + 物理坐标系映射修正
+// 核心修复：回归最原始的平移逻辑，系统给多少位移，就移多少，绝对跟手！
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [pan translationInView:pan.view];
+        CGPoint translation = [pan translationInView:self.window];
         
-        CGPoint realTranslation = translation;
-        
-        // 核心修复：如果在横屏状态，需要把手指的滑动方向映射到真实的系统坐标系里
-        if (fabs(self.currentAngle) > 1.0) {
-            if (self.currentAngle > 0) {
-                // 顺时针 90 度
-                realTranslation.x = translation.y;
-                realTranslation.y = -translation.x;
-            } else {
-                // 逆时针 90 度
-                realTranslation.x = -translation.y;
-                realTranslation.y = translation.x;
-            }
-        }
-        
-        // 直接移动整个 Window
-        CGPoint newWindowCenter = CGPointMake(self.window.center.x + realTranslation.x, self.window.center.y + realTranslation.y);
+        // 直接让窗口加上物理位移
+        CGPoint newWindowCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
+        // 边界限制（用于防止飞出屏幕）
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         CGFloat screenW = screenBounds.size.width;
         CGFloat screenH = screenBounds.size.height;
         
-        CGFloat maxW = MAX(screenW, screenH);
-        CGFloat minW = MIN(screenW, screenH);
-        
-        CGFloat visualW = isRotated ? maxW : minW;
-        CGFloat visualH = isRotated ? minW : maxW;
-        
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        CGFloat realMinX = ballW / 2.0 + 10.0;
-        CGFloat realMaxX = screenW - ballW / 2.0 - 10.0;
-        CGFloat realMinY = ballH / 2.0 + 20.0;
-        CGFloat realMaxY = screenH - ballH / 2.0 - 10.0;
+        CGFloat realMinX, realMaxX, realMinY, realMaxY;
         
         if (isRotated) {
             realMinX = ballW / 2.0 + 10.0;
-            realMaxX = screenH - ballW / 2.0 - 10.0; 
+            realMaxX = screenH - ballW / 2.0 - 10.0;
             realMinY = ballH / 2.0 + 20.0;
-            realMaxY = screenW - ballH / 2.0 - 10.0; 
+            realMaxY = screenW - ballH / 2.0 - 10.0;
+        } else {
+            realMinX = ballW / 2.0 + 10.0;
+            realMaxX = screenW - ballW / 2.0 - 10.0;
+            realMinY = ballH / 2.0 + 20.0;
+            realMaxY = screenH - ballH / 2.0 - 10.0;
         }
         
         newWindowCenter.x = MAX(realMinX, MIN(newWindowCenter.x, realMaxX));
@@ -401,7 +385,7 @@ void simulateVolumeDown(void) {
         
         self.window.center = newWindowCenter;
         
-        [pan setTranslation:CGPointZero inView:pan.view];
+        [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
         NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
         NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
