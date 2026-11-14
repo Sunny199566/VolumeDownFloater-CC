@@ -6,6 +6,10 @@
 @property (strong, nonatomic) UISwitch *timeSwitch;
 @property (strong, nonatomic) UITextField *titleTextField;
 @property (strong, nonatomic) UISlider *hapticSlider;
+@property (strong, nonatomic) UISlider *sizeSlider;
+@property (strong, nonatomic) UISlider *alphaSlider;
+@property (strong, nonatomic) NSString *currentColor;
+@property (strong, nonatomic) NSMutableArray *colorButtons;
 @end
 
 @implementation AppDelegate
@@ -17,90 +21,165 @@
     self.window.rootViewController = vc;
     self.window.hidden = NO;
 
-    UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, self.window.bounds.size.width, 40)];
+    // 使用 UIScrollView 防止小屏幕装不下
+    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.window.bounds];
+    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 750);
+    [vc.view addSubview:scrollView];
+
+    UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 40, self.window.bounds.size.width, 40)];
     headerLabel.text = @"音量悬浮球控制台";
     headerLabel.font = [UIFont boldSystemFontOfSize:24];
     headerLabel.textAlignment = NSTextAlignmentCenter;
-    [vc.view addSubview:headerLabel];
+    [scrollView addSubview:headerLabel];
 
     // 1. 显示悬浮球
-    UILabel *switchLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 150, 200, 30)];
+    UILabel *switchLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 110, 200, 30)];
     switchLabel.text = @"显示悬浮球";
     switchLabel.font = [UIFont systemFontOfSize:18];
-    [vc.view addSubview:switchLabel];
-    self.toggleSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 150, 51, 31)];
+    [scrollView addSubview:switchLabel];
+    self.toggleSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 110, 51, 31)];
     self.toggleSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"toggleState"];
     [self.toggleSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-    [vc.view addSubview:self.toggleSwitch];
+    [scrollView addSubview:self.toggleSwitch];
 
     // 2. 实时时间
-    UILabel *timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 200, 200, 30)];
+    UILabel *timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 160, 200, 30)];
     timeLabel.text = @"显示实时时间";
     timeLabel.font = [UIFont systemFontOfSize:18];
-    [vc.view addSubview:timeLabel];
-    self.timeSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 200, 51, 31)];
+    [scrollView addSubview:timeLabel];
+    self.timeSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 160, 51, 31)];
     self.timeSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"timeState"];
     [self.timeSwitch addTarget:self action:@selector(timeSwitchChanged:) forControlEvents:UIControlEventValueChanged];
-    [vc.view addSubview:self.timeSwitch];
+    [scrollView addSubview:self.timeSwitch];
 
     // 3. 文字修改
-    UILabel *textLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 250, 200, 30)];
+    UILabel *textLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 210, 200, 30)];
     textLabel.text = @"悬浮球内部文字";
     textLabel.font = [UIFont systemFontOfSize:18];
-    [vc.view addSubview:textLabel];
-
-    self.titleTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 290, self.window.bounds.size.width - 80, 40)];
+    [scrollView addSubview:textLabel];
+    self.titleTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 250, self.window.bounds.size.width - 80, 40)];
     self.titleTextField.borderStyle = UITextBorderStyleRoundedRect;
     self.titleTextField.placeholder = @"输入你想显示的文字";
     self.titleTextField.textAlignment = NSTextAlignmentCenter;
-    
     NSString *path = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
     NSString *currentTitle = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
     self.titleTextField.text = (currentTitle && currentTitle.length > 0) ? currentTitle : @"音量-";
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
-    [vc.view addSubview:self.titleTextField];
+    [scrollView addSubview:self.titleTextField];
 
-    // 4. 震动强度调节
-    UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 350, 200, 30)];
+    // 4. 震动强度
+    UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 310, 200, 30)];
     hapticLabel.text = @"单击震动强度";
     hapticLabel.font = [UIFont systemFontOfSize:18];
-    [vc.view addSubview:hapticLabel];
-
-    self.hapticSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 390, self.window.bounds.size.width - 80, 30)];
+    [scrollView addSubview:hapticLabel];
+    self.hapticSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 350, self.window.bounds.size.width - 80, 30)];
     self.hapticSlider.minimumValue = 0.0;
     self.hapticSlider.maximumValue = 1.0;
-    
     NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
     NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
     self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 0.8; 
-    
     [self.hapticSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
-    [vc.view addSubview:self.hapticSlider];
+    [scrollView addSubview:self.hapticSlider];
 
-    // 5. 选择图片
+    // 5. 悬浮球大小
+    UILabel *sizeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 400, 200, 30)];
+    sizeLabel.text = @"悬浮球大小";
+    sizeLabel.font = [UIFont systemFontOfSize:18];
+    [scrollView addSubview:sizeLabel];
+    self.sizeSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 440, self.window.bounds.size.width - 80, 30)];
+    self.sizeSlider.minimumValue = 40.0;
+    self.sizeSlider.maximumValue = 80.0;
+    NSString *sizePath = @"/var/mobile/Library/Preferences/volumefloater_size.txt";
+    NSString *sizeStr = [NSString stringWithContentsOfFile:sizePath encoding:NSUTF8StringEncoding error:nil];
+    self.sizeSlider.value = (sizeStr && sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
+    [self.sizeSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
+    [scrollView addSubview:self.sizeSlider];
+
+    // 6. 悬浮球透明度
+    UILabel *alphaLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 490, 200, 30)];
+    alphaLabel.text = @"悬浮球透明度";
+    alphaLabel.font = [UIFont systemFontOfSize:18];
+    [scrollView addSubview:alphaLabel];
+    self.alphaSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 530, self.window.bounds.size.width - 80, 30)];
+    self.alphaSlider.minimumValue = 0.3;
+    self.alphaSlider.maximumValue = 1.0;
+    NSString *alphaPath = @"/var/mobile/Library/Preferences/volumefloater_alpha.txt";
+    NSString *alphaStr = [NSString stringWithContentsOfFile:alphaPath encoding:NSUTF8StringEncoding error:nil];
+    self.alphaSlider.value = (alphaStr && alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+    [self.alphaSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
+    [scrollView addSubview:self.alphaSlider];
+
+    // 7. 悬浮球颜色
+    UILabel *colorLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 580, 200, 30)];
+    colorLabel.text = @"悬浮球底色";
+    colorLabel.font = [UIFont systemFontOfSize:18];
+    [scrollView addSubview:colorLabel];
+    
+    self.currentColor = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
+    if (!self.currentColor || self.currentColor.length == 0) self.currentColor = @"red";
+
+    self.colorButtons = [NSMutableArray array];
+    NSArray *colors = @[@"red", @"blue", @"green", @"black", @"clear"];
+    NSArray *uiColors = @[[UIColor systemRedColor], [UIColor systemBlueColor], [UIColor systemGreenColor], [UIColor blackColor], [UIColor lightGrayColor]];
+    
+    for (int i = 0; i < 5; i++) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        btn.frame = CGRectMake(40 + i * 55, 620, 40, 40);
+        btn.backgroundColor = uiColors[i];
+        btn.layer.cornerRadius = 20;
+        btn.tag = i;
+        btn.layer.borderWidth = 2.0;
+        btn.layer.borderColor = [UIColor clearColor].CGColor;
+        [btn addTarget:self action:@selector(colorSelected:) forControlEvents:UIControlEventTouchUpInside];
+        [scrollView addSubview:btn];
+        [self.colorButtons addObject:btn];
+    }
+    [self updateColorButtonBorders];
+
+    // 8. 选图与清除
     UIButton *imageBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    imageBtn.frame = CGRectMake(40, 450, self.window.bounds.size.width - 80, 45);
-    [imageBtn setTitle:@"从相册选择自定义图标" forState:UIControlStateNormal];
-    imageBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    imageBtn.frame = CGRectMake(40, 680, (self.window.bounds.size.width - 90) / 2, 45);
+    [imageBtn setTitle:@"选择自定义图" forState:UIControlStateNormal];
     imageBtn.backgroundColor = [UIColor systemBlueColor];
     [imageBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     imageBtn.layer.cornerRadius = 10;
     [imageBtn addTarget:self action:@selector(selectImage) forControlEvents:UIControlEventTouchUpInside];
-    [vc.view addSubview:imageBtn];
+    [scrollView addSubview:imageBtn];
 
-    // 6. 清除图片
     UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    clearBtn.frame = CGRectMake(40, 510, self.window.bounds.size.width - 80, 45);
-    [clearBtn setTitle:@"清除自定义图标" forState:UIControlStateNormal];
-    clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    clearBtn.frame = CGRectMake(50 + (self.window.bounds.size.width - 90) / 2, 680, (self.window.bounds.size.width - 90) / 2, 45);
+    [clearBtn setTitle:@"清除图片" forState:UIControlStateNormal];
     clearBtn.backgroundColor = [UIColor systemRedColor];
     [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     clearBtn.layer.cornerRadius = 10;
     [clearBtn addTarget:self action:@selector(clearImage) forControlEvents:UIControlEventTouchUpInside];
-    [vc.view addSubview:clearBtn];
+    [scrollView addSubview:clearBtn];
 
     [self syncState:self.toggleSwitch.isOn];
     return YES;
+}
+
+- (void)updateColorButtonBorders {
+    NSArray *colors = @[@"red", @"blue", @"green", @"black", @"clear"];
+    for (int i = 0; i < 5; i++) {
+        UIButton *btn = self.colorButtons[i];
+        if ([colors[i] isEqualToString:self.currentColor]) {
+            btn.layer.borderColor = [UIColor whiteColor].CGColor;
+            btn.transform = CGAffineTransformMakeScale(1.1, 1.1);
+        } else {
+            btn.layer.borderColor = [UIColor clearColor].CGColor;
+            btn.transform = CGAffineTransformIdentity;
+        }
+    }
+}
+
+- (void)colorSelected:(UIButton *)sender {
+    NSArray *colors = @[@"red", @"blue", @"green", @"black", @"clear"];
+    self.currentColor = colors[sender.tag];
+    [self.currentColor writeToFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self updateColorButtonBorders];
+    [self uiChanged:nil];
+    [self triggerTestHaptic];
 }
 
 - (void)switchChanged:(UISwitch *)sender {
@@ -115,35 +194,37 @@
     [[NSUserDefaults standardUserDefaults] synchronize];
     NSString *path = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
     [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
-    [self triggerTestHaptic];
+    [self uiChanged:nil];
 }
 
 - (void)hapticChanged:(UISlider *)sender {
-    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
     NSString *valStr = [NSString stringWithFormat:@"%f", sender.value];
-    [valStr writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
-    
+    [valStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self triggerTestHaptic];
+}
+
+- (void)uiChanged:(UISlider *)sender {
+    NSString *sizeStr = [NSString stringWithFormat:@"%f", self.sizeSlider.value];
+    [sizeStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
+    NSString *alphaStr = [NSString stringWithFormat:@"%f", self.alphaSlider.value];
+    [alphaStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [gen impactOccurredWithIntensity:self.hapticSlider.value];
-    } else {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [gen impactOccurred];
     }
 }
 
 - (void)textChanged:(UITextField *)sender {
     NSString *newText = sender.text;
     if (newText.length == 0) newText = @" ";
-    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
-    [newText writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
+    [newText writeToFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self uiChanged:nil];
 }
 
 - (void)selectImage {
@@ -158,16 +239,14 @@
     UIImage *image = info[UIImagePickerControllerOriginalImage];
     if (image) {
         NSData *imgData = UIImageJPEGRepresentation(image, 0.8);
-        NSString *path = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
-        [imgData writeToFile:path atomically:YES];
-        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
+        [imgData writeToFile:@"/var/mobile/Library/Preferences/volumefloater_bg.png" atomically:YES];
+        [self uiChanged:nil];
     }
 }
 
 - (void)clearImage {
-    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
-    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
+    [[NSFileManager defaultManager] removeItemAtPath:@"/var/mobile/Library/Preferences/volumefloater_bg.png" error:nil];
+    [self uiChanged:nil];
 }
 
 - (void)syncState:(BOOL)isOn {
