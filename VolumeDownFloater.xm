@@ -2,7 +2,6 @@
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -43,16 +42,12 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-
-// 核心修复：用属性强引用住这个观察者和代码块，防止被系统提前释放导致崩溃
-@property (strong, nonatomic) id fbsObserver;
-@property (copy, nonatomic) void (^fbsHandler)(long long, double, double);
-
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateTitle;
+- (void)updateOrientation;
 @end
 
 @implementation FloaterManager
@@ -110,48 +105,45 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 开启系统底层的方向监听
-        [self setupFBSObserver];
+        // 首次加载时读取一次方向
+        [self updateOrientation];
     });
 }
 
-- (void)setupFBSObserver {
-    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
-    if (FBSClass) {
-        self.fbsObserver = [[FBSClass alloc] init];
-        
-        // 修复崩溃点：把 Block 存入 self 的属性中，让它一直存活！
-        __weak typeof(self) weakSelf = self;
-        self.fbsHandler = ^(long long orientation, double rotation, double transition) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf applyFBSOrientation:orientation];
-            });
-        };
-        
-        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"setHandler:")]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"setHandler:"), self.fbsHandler);
-        }
-        
-        // 启动时主动同步一次方向
-        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"activeOrientation")]) {
-            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
-            [self applyFBSOrientation:currentOri];
+// 核心方法：安全地读取 SpringBoard 的真实界面方向
+- (void)updateOrientation {
+    if (self.window.hidden) return;
+    
+    UIInterfaceOrientation currentOrientation = UIInterfaceOrientationPortrait;
+    
+    // 通过 NSInvocation 安全地调用私有方法
+    SEL selector = NSSelectorFromString(@"activeInterfaceOrientation");
+    if ([[UIApplication sharedApplication] respondsToSelector:selector]) {
+        NSMethodSignature *signature = [UIApplication instanceMethodSignatureForSelector:selector];
+        if (signature) {
+            NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+            [invocation setTarget:[UIApplication sharedApplication]];
+            [invocation setSelector:selector];
+            [invocation invoke];
+            
+            // 获取返回值
+            if (signature.methodReturnLength == sizeof(UIInterfaceOrientation)) {
+                [invocation getReturnValue:&currentOrientation];
+            }
         }
     }
-}
-
-// FBS 的方向值：1=竖屏，2=倒置，3=左横，4=右横
-- (void)applyFBSOrientation:(long long)orientation {
+    
+    // 根据读取到的方向，计算文字角度
     CGFloat targetAngle = 0;
-    
-    if (orientation == 3) {
-        targetAngle = M_PI_2;   // 左横屏
-    } else if (orientation == 4) {
-        targetAngle = -M_PI_2;  // 右横屏
+    if (currentOrientation == UIInterfaceOrientationLandscapeLeft) {
+        targetAngle = M_PI_2;
+    } else if (currentOrientation == UIInterfaceOrientationLandscapeRight) {
+        targetAngle = -M_PI_2;
     } else {
-        targetAngle = 0;        // 竖屏
+        targetAngle = 0;
     }
     
+    // 平滑旋转
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -174,9 +166,8 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible && self.fbsObserver) {
-            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
-            [self applyFBSOrientation:currentOri];
+        if (visible) {
+            [self updateOrientation];
         }
     });
 }
@@ -211,6 +202,22 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// ======================= 核心 Hook =======================
+%hook SpringBoard
+
+// 监听界面方向变化的底层方法
+- (void)noteUIOrientationChanged:(int)arg1 display:(id)arg2 {
+    %orig;
+    // 当方向改变时，通知我们的管理器更新悬浮球文字
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[FloaterManager sharedInstance] updateOrientation];
+    });
+}
+
+%end
+// =======================================================
+
+// 通知处理 (保持原样)
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
