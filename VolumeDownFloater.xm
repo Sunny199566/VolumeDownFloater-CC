@@ -171,7 +171,7 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 菜单紧贴悬浮球，且有极严的防出界保护
+// 绝对居中，抛弃一切乱七八糟的坐标计算
 - (void)showCustomMenu {
     if (self.menuWindow) {
         [self hideMenu];
@@ -185,12 +185,11 @@ void simulateVolumeDown(void) {
         self.menuWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
     
+    // 取最大的尺寸作为正方形
     CGRect screenBounds = [UIScreen mainScreen].bounds;
     CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
     
     self.menuWindow.frame = CGRectMake(0, 0, maxDim, maxDim);
-    self.menuWindow.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
-    
     self.menuWindow.windowLevel = UIWindowLevelAlert + 3000;
     self.menuWindow.backgroundColor = [UIColor clearColor];
     
@@ -199,9 +198,11 @@ void simulateVolumeDown(void) {
     self.menuWindow.rootViewController = vc;
     self.menuWindow.hidden = NO;
     
-    // 遮罩，绝不旋转
+    // 遮罩，强制铺满并居中
     UIView *maskView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, maxDim, maxDim)];
     maskView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+    // 强制居中
+    maskView.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
     
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(actionCancel)];
     [maskView addGestureRecognizer:tap];
@@ -210,33 +211,8 @@ void simulateVolumeDown(void) {
     card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     card.layer.cornerRadius = 12;
     
-    // ==========================================
-    // 核心计算：菜单紧贴悬浮球，且绝对不出界
-    // ==========================================
-    // 以悬浮球在屏幕上的实际物理坐标作为中心参考
-    CGFloat ballX = self.window.center.x;
-    CGFloat ballY = self.window.center.y;
-    
-    // 为了让菜单不把球完全盖住，我们在垂直方向偏移一点（比如球在下面，菜单就往上弹）
-    CGFloat cardX = ballX;
-    CGFloat cardY = ballY - 120; // 默认弹在球上方
-    
-    // 如果球太靠上了，就弹在球下方
-    if (cardY < 100) {
-        cardY = ballY + 120;
-    }
-    
-    // 限制不超出屏幕物理边界
-    CGFloat minX = 110; // 卡片宽度一半 + 边距
-    CGFloat maxX = maxDim - 110;
-    if (ballX > screenBounds.size.width) {
-        minX = screenBounds.size.height - 110; // 如果球横过来了
-    }
-    
-    cardX = MAX(110, MIN(cardX, maxDim - 110));
-    cardY = MAX(110, MIN(cardY, maxDim - 110));
-    
-    card.center = CGPointMake(cardX, cardY);
+    // 强制居中
+    card.center = CGPointMake(maxDim / 2.0, maxDim / 2.0);
     
     // 1. 旋转
     UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
