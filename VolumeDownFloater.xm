@@ -1,7 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <objc/runtime.h>
+#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -42,12 +42,17 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (strong, nonatomic) CMMotionManager *motionManager;
+
 @property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) int stableCount;
+@property (nonatomic, assign) CGFloat targetMotionAngle;
+
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateTitle;
-- (void)updateOrientation;
+- (void)handleDoubleTap;
 @end
 
 @implementation FloaterManager
@@ -90,8 +95,16 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
+        // 单击触发音量减
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
+        // 拖拽移动位置
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+        
+        // 终极防线：双击手动旋转（防止有些游戏彻底屏蔽系统信号）
+        UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap)];
+        doubleTap.numberOfTapsRequired = 2;
+        [self.floatBtn addGestureRecognizer:doubleTap];
+        
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
         self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
@@ -104,51 +117,93 @@ void simulateVolumeDown(void) {
         [self updateTitle];
         
         self.currentAngle = 0;
+        self.targetMotionAngle = 0;
+        self.stableCount = 0;
         
-        // 首次加载时读取一次方向
-        [self updateOrientation];
+        // 开启物理辅助判定（防误触版）
+        self.motionManager = [[CMMotionManager alloc] init];
+        if (self.motionManager.isDeviceMotionAvailable) {
+            [self.motionManager startDeviceMotionUpdates];
+            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
+        }
+        
+        // 定时读取 UI 界面宽高比（针对普通横屏视频和 App）
+        [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkUIOrientation) userInfo:nil repeats:YES];
     });
 }
 
-// 核心方法：安全地读取 SpringBoard 的真实界面方向
-- (void)updateOrientation {
+// 双击手动旋转兜底
+- (void)handleDoubleTap {
+    self.currentAngle += M_PI_2;
+    if (self.currentAngle >= M_PI * 2) {
+        self.currentAngle = 0;
+    }
+    
+    [UIView animateWithDuration:0.3 animations:^{
+        self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+    }];
+    
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [gen impactOccurred];
+}
+
+// 第一重判定：读取前台界面的宽高比（无视重力，无视物理姿态）
+- (void)checkUIOrientation {
     if (self.window.hidden) return;
     
-    UIInterfaceOrientation currentOrientation = UIInterfaceOrientationPortrait;
-    
-    // 通过 NSInvocation 安全地调用私有方法
-    SEL selector = NSSelectorFromString(@"activeInterfaceOrientation");
-    if ([[UIApplication sharedApplication] respondsToSelector:selector]) {
-        NSMethodSignature *signature = [UIApplication instanceMethodSignatureForSelector:selector];
-        if (signature) {
-            NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
-            [invocation setTarget:[UIApplication sharedApplication]];
-            [invocation setSelector:selector];
-            [invocation invoke];
+    // 只有在这个模式下才生效（针对视频 App）
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *activeScene = (UIWindowScene *)scene;
+            CGRect bounds = activeScene.coordinateSpace.bounds;
             
-            // 获取返回值
-            if (signature.methodReturnLength == sizeof(UIInterfaceOrientation)) {
-                [invocation getReturnValue:&currentOrientation];
+            if (bounds.size.width > bounds.size.height) {
+                // 界面变横，覆盖物理状态
+                if (fabs(self.currentAngle - (-M_PI_2)) > 0.1) {
+                    self.currentAngle = -M_PI_2;
+                    [UIView animateWithDuration:0.3 animations:^{
+                        self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+                    }];
+                }
+                return;
             }
         }
     }
+}
+
+// 第二重判定：物理陀螺仪防误触（针对游戏强制横屏，且系统拒绝给宽高的情况）
+- (void)checkMotion {
+    if (self.window.hidden) return;
     
-    // 根据读取到的方向，计算文字角度
-    CGFloat targetAngle = 0;
-    if (currentOrientation == UIInterfaceOrientationLandscapeLeft) {
-        targetAngle = M_PI_2;
-    } else if (currentOrientation == UIInterfaceOrientationLandscapeRight) {
-        targetAngle = -M_PI_2;
+    CMDeviceMotion *motion = self.motionManager.deviceMotion;
+    if (!motion) return;
+    
+    double x = motion.gravity.x;
+    
+    CGFloat motionAngle = 0;
+    if (x > 0.8) {
+        motionAngle = -M_PI_2;
+    } else if (x < -0.8) {
+        motionAngle = M_PI_2;
     } else {
-        targetAngle = 0;
+        motionAngle = 0;
     }
     
-    // 平滑旋转
-    if (fabs(self.currentAngle - targetAngle) > 0.1) {
-        self.currentAngle = targetAngle;
-        [UIView animateWithDuration:0.3 animations:^{
-            self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
-        }];
+    // 防抖缓冲：如果你没横彻底，或者手抖，这里不会触发
+    if (fabs(motionAngle - self.targetMotionAngle) > 0.1) {
+        self.targetMotionAngle = motionAngle;
+        self.stableCount = 0;
+    } else {
+        self.stableCount++;
+        // 必须稳定保持 0.5 秒 (0.1 * 5次)
+        if (self.stableCount == 5) {
+            if (fabs(self.currentAngle - self.targetMotionAngle) > 0.1) {
+                self.currentAngle = self.targetMotionAngle;
+                [UIView animateWithDuration:0.3 animations:^{
+                    self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+                }];
+            }
+        }
     }
 }
 
@@ -166,9 +221,6 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self updateOrientation];
-        }
     });
 }
 
@@ -202,22 +254,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// ======================= 核心 Hook =======================
-%hook SpringBoard
-
-// 监听界面方向变化的底层方法
-- (void)noteUIOrientationChanged:(int)arg1 display:(id)arg2 {
-    %orig;
-    // 当方向改变时，通知我们的管理器更新悬浮球文字
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[FloaterManager sharedInstance] updateOrientation];
-    });
-}
-
-%end
-// =======================================================
-
-// 通知处理 (保持原样)
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
