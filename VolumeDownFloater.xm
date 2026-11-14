@@ -29,7 +29,6 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// 核心保险 1：创建一个绝对禁止系统自动旋转的 ViewController
 @interface FloaterViewController : UIViewController
 @end
 @implementation FloaterViewController
@@ -75,7 +74,6 @@ void simulateVolumeDown(void) {
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         
-        // 使用禁止旋转的 Controller
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
@@ -83,7 +81,6 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // 背景圆形按钮，完全不参与旋转
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
@@ -95,7 +92,6 @@ void simulateVolumeDown(void) {
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
-        // 文字 Label，只转这个玩意儿
         self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.titleLabel.textColor = [UIColor whiteColor];
         self.titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -105,26 +101,25 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIDeviceOrientationDidChangeNotification object:nil];
+        // 核心改动：监听界面真实旋转通知，而不是重力感应
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
     });
 }
 
-// 核心保险 2：只对 Label 施加旋转，强制覆盖之前的任何形变
 - (void)handleRotation {
-    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
+    // 获取当前 App 界面的真实方向
+    UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
     CGFloat angle = 0;
     
-    if (orientation == UIDeviceOrientationLandscapeLeft) {
+    if (orientation == UIInterfaceOrientationLandscapeLeft) {
+        angle = -M_PI_2; // 注意这里的角度和物理方向是反的
+    } else if (orientation == UIInterfaceOrientationLandscapeRight) {
         angle = M_PI_2;
-    } else if (orientation == UIDeviceOrientationLandscapeRight) {
-        angle = -M_PI_2;
-    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
+    } else if (orientation == UIInterfaceOrientationPortraitUpsideDown) {
         angle = M_PI;
     }
     
     [UIView animateWithDuration:0.3 animations:^{
-        // 让文字围绕中心点旋转
         self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
     }];
 }
