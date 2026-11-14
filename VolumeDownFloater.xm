@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -37,14 +39,6 @@ void simulateVolumeDown(void) {
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
 @end
 
-// 新增：专门用于菜单的 Controller，强制锁死竖屏方向，防止窗口跟着系统转
-@interface MenuViewController : UIViewController
-@end
-@implementation MenuViewController
-- (BOOL)shouldAutorotate { return NO; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
-@end
-
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIView *mainContainer; 
@@ -56,10 +50,9 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticIntensity; 
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
-@property (nonatomic, assign) BOOL isHiddenState; 
 
-@property (strong, nonatomic) UIWindow *menuWindow;
 @property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) NSTimer *orientationTimer; 
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
@@ -98,7 +91,6 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
-        self.isHiddenState = NO;
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -168,137 +160,63 @@ void simulateVolumeDown(void) {
         }
         self.window.center = CGPointMake(px, py);
 
+        // 启动无视旋转锁定的底层方向轮询
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+
         [self updateUI];
     });
 }
 
+// 核心逻辑：无视旋转锁定，强制读取系统底层的真实方向
+- (void)checkAutoOrientation {
+    if (self.window.hidden) return;
+    
+    long long sysOrientation = 1; // 默认竖屏
+    
+    // 安全读取 FBS 底层方向（不挂监听，读完就丢，绝不崩溃）
+    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+    if (FBSClass) {
+        id observer = [[FBSClass alloc] init];
+        SEL sel = NSSelectorFromString(@"activeOrientation");
+        if ([observer respondsToSelector:sel]) {
+            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
+        }
+    }
+    
+    CGFloat targetAngle = 0;
+    
+    // sysOrientation: 1 是竖屏，3 是左横屏，4 是右横屏
+    if (sysOrientation == 3 || sysOrientation == 4) {
+        // 只要检测到横屏，不管是左横还是右横，统统顺时针 90 度
+        targetAngle = M_PI_2;
+    } else {
+        // 竖屏，死锁 0 度
+        targetAngle = 0;
+    }
+    
+    // 平滑过渡
+    if (fabs(self.currentAngle - targetAngle) > 0.1) {
+        self.currentAngle = targetAngle;
+        [UIView animateWithDuration:0.3 animations:^{
+            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        }];
+    }
+}
+
+// 长按：手动强制旋转 90 度（用于你想上下颠倒的时候）
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
-        [self showCustomMenu];
-    }
-}
-
-// 终极修复：全屏窗口 + 强制竖屏，保证任何地方都能点到，且绝对不乱转
-- (void)showCustomMenu {
-    if (self.menuWindow) {
-        [self hideMenu];
-        return;
-    }
-    
-    UIWindowScene *windowScene = self.window.windowScene;
-    if (@available(iOS 13.0, *)) {
-        self.menuWindow = [[UIWindow alloc] initWithWindowScene:windowScene];
-    } else {
-        self.menuWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    }
-    
-    // 锁定为屏幕尺寸
-    self.menuWindow.frame = [UIScreen mainScreen].bounds;
-    self.menuWindow.windowLevel = UIWindowLevelAlert + 3000;
-    self.menuWindow.backgroundColor = [UIColor clearColor]; 
-    
-    // 核心修复：使用锁定竖屏方向的 Controller
-    MenuViewController *vc = [[MenuViewController alloc] init];
-    vc.view.backgroundColor = [UIColor clearColor];
-    self.menuWindow.rootViewController = vc;
-    self.menuWindow.hidden = NO;
-    
-    // 铺满全屏的黑色遮罩
-    UIView *maskView = [[UIView alloc] initWithFrame:vc.view.bounds];
-    maskView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
-    
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(actionCancel)];
-    [maskView addGestureRecognizer:tap];
-
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 160)];
-    card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
-    card.layer.cornerRadius = 12;
-    
-    // 强制中心点
-    CGFloat centerX = vc.view.bounds.size.width / 2.0;
-    CGFloat centerY = vc.view.bounds.size.height / 2.0;
-    
-    // 如果当前是横屏，反向旋转卡片，保证字正
-    if (fabs(self.currentAngle) > 1.0) {
-        card.transform = CGAffineTransformMakeRotation(self.currentAngle);
-    }
-    
-    card.center = CGPointMake(centerX, centerY);
-    
-    // 1. 旋转
-    UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    rotateBtn.frame = CGRectMake(0, 0, 200, 50);
-    [rotateBtn setTitle:@"旋转 90 度" forState:UIControlStateNormal];
-    [rotateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    rotateBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [rotateBtn addTarget:self action:@selector(actionRotate) forControlEvents:UIControlEventTouchUpInside];
-    [card addSubview:rotateBtn];
-    
-    UIView *line1 = [[UIView alloc] initWithFrame:CGRectMake(0, 50, 200, 1)];
-    line1.backgroundColor = [UIColor darkGrayColor];
-    [card addSubview:line1];
-    
-    // 2. 隐身
-    UIButton *hideBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    hideBtn.frame = CGRectMake(0, 51, 200, 50);
-    [hideBtn setTitle:self.isHiddenState ? @"恢复显示" : @"临时隐身" forState:UIControlStateNormal];
-    [hideBtn setTitleColor:self.isHiddenState ? [UIColor systemGreenColor] : [UIColor redColor] forState:UIControlStateNormal];
-    hideBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [hideBtn addTarget:self action:@selector(actionHide) forControlEvents:UIControlEventTouchUpInside];
-    [card addSubview:hideBtn];
-    
-    UIView *line2 = [[UIView alloc] initWithFrame:CGRectMake(0, 101, 200, 1)];
-    line2.backgroundColor = [UIColor darkGrayColor];
-    [card addSubview:line2];
-    
-    // 3. 取消
-    UIButton *cancelBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    cancelBtn.frame = CGRectMake(0, 102, 200, 48);
-    [cancelBtn setTitle:@"取消" forState:UIControlStateNormal];
-    [cancelBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
-    cancelBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [cancelBtn addTarget:self action:@selector(actionCancel) forControlEvents:UIControlEventTouchUpInside];
-    [card addSubview:cancelBtn];
-    
-    [maskView addSubview:card];
-    [vc.view addSubview:maskView];
-}
-
-- (void)actionRotate {
-    [self hideMenu];
-    self.currentAngle += M_PI_2;
-    if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
-    [UIView animateWithDuration:0.3 animations:^{
-        self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
-    }];
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [gen impactOccurred];
-}
-
-- (void)actionHide {
-    [self hideMenu];
-    if (!self.isHiddenState) {
-        self.isHiddenState = YES;
-        [UIView animateWithDuration:0.3 animations:^{ self.floatBtn.alpha = 0.02; }];
-    } else {
-        self.isHiddenState = NO;
-        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
-        CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
-        [UIView animateWithDuration:0.3 animations:^{ self.floatBtn.alpha = normalAlpha; }];
-    }
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [gen impactOccurred];
-}
-
-- (void)actionCancel {
-    [self hideMenu];
-}
-
-- (void)hideMenu {
-    if (self.menuWindow) {
-        self.menuWindow.hidden = YES;
-        self.menuWindow = nil;
+        
+        self.currentAngle += M_PI_2;
+        if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
+        
+        [UIView animateWithDuration:0.3 animations:^{
+            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        }];
+        
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [gen impactOccurred];
     }
 }
 
@@ -330,7 +248,7 @@ void simulateVolumeDown(void) {
         self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
-        if (!self.isHiddenState) self.floatBtn.alpha = alpha;
+        self.floatBtn.alpha = alpha;
         
         self.titleLabel.frame = self.floatBtn.bounds;
         self.titleLabel.font = [UIFont systemFontOfSize:size * 0.25 weight:UIFontWeightMedium];
@@ -388,7 +306,7 @@ void simulateVolumeDown(void) {
 }
 
 - (void)handleTouchUpInside {
-    if (self.window.hidden || self.isHiddenState || self.menuWindow) return;
+    if (self.window.hidden) return;
     
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
