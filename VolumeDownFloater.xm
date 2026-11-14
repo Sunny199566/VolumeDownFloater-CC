@@ -79,19 +79,24 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
+        // 只取最大的物理长边（852）作为窗口尺寸，绝对安全，绝不崩溃
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
+        
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, maxDim, maxDim)]; }
         
-        // 【核心魔法】：把底层窗口放大到 2000x2000，彻底撑爆竖屏坐标限制！
-        self.window.frame = CGRectMake(0, 0, 2000, 2000);
-        self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
+        self.window.frame = CGRectMake(0, 0, maxDim, maxDim);
+        self.window.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
-        self.window.hidden = YES;
+        
+        // 【关键修复】：直接强制显示，防止被 APP 隐藏的通知卡住
+        self.window.hidden = NO; 
 
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
@@ -110,8 +115,9 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        // 固定在 2000x2000 窗口的正中心
-        self.mainContainer.center = CGPointMake(1000, 1000);
+        
+        // 【关键修复】：不再读取旧坐标，强制把球放回屏幕默认位置
+        self.mainContainer.center = CGPointMake(maxDim / 2.0, maxDim / 2.0);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -152,23 +158,10 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
-        
-        // 修复了拼写错误：adjustsFontSizeToFitWidth
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
-        
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
-        
-        // 读取上次保存的位置，默认在窗口中心(1000, 1000)
-        CGFloat px = 1000, py = 1000;
-        NSString *pxStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" encoding:NSUTF8StringEncoding error:nil];
-        NSString *pyStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (pxStr.length > 0 && pyStr.length > 0) {
-            px = [pxStr floatValue];
-            py = [pyStr floatValue];
-        }
-        self.mainContainer.center = CGPointMake(px, py);
 
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
 
@@ -257,7 +250,6 @@ void simulateVolumeDown(void) {
 
         CGFloat totalHeight = size + 25;
         
-        // 【重要】这里不再修改 window 的 frame，只调整容器和按钮的大小
         self.mainContainer.bounds = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
@@ -358,34 +350,30 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 终极无敌边界计算（以2000x2000窗口中心为基准）
+// 终极无敌边界计算（基于最大长边安全窗口，限制不拖出边界）
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
-        
-        // 直接移动容器，因为窗口有2000大，绝对不会被系统截断
         CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
         CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenW = screenBounds.size.width;
-        CGFloat screenH = screenBounds.size.height;
+        CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
+        CGFloat minDim = MIN(screenBounds.size.width, screenBounds.size.height);
         
-        CGFloat maxW = MAX(screenW, screenH);
-        CGFloat minW = MIN(screenW, screenH);
-        
-        CGFloat visualW = isRotated ? maxW : minW;
-        CGFloat visualH = isRotated ? minW : maxW;
+        CGFloat visualW = isRotated ? maxDim : minDim;
+        CGFloat visualH = isRotated ? minDim : maxDim;
         
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 窗口的正中心是 1000
-        CGFloat centerX = 1000;
-        CGFloat centerY = 1000;
+        // 因为窗口固定在最大长边尺寸的正中心（即 (maxDim/2, maxDim/2)）
+        // 我们需要保证 mainContainer 在屏幕可视范围内的相对位置
+        CGFloat centerX = maxDim / 2.0;
+        CGFloat centerY = maxDim / 2.0;
         
         CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
         CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
