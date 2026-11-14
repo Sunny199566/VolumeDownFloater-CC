@@ -160,7 +160,8 @@ void simulateVolumeDown(void) {
                 py = savedY;
             }
         }
-        self.window.center = CGPoint(x: px, y: py);
+        // 修复了这里的语法错误
+        self.window.center = CGPointMake(px, py);
 
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkSystemOrientation) userInfo:nil repeats:YES];
         [self updateUI];
