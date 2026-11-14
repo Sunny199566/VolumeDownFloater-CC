@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -92,8 +94,6 @@ void simulateVolumeDown(void) {
         self.isCustomHaptic = NO;
         self.isHiddenState = NO;
 
-        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -162,27 +162,42 @@ void simulateVolumeDown(void) {
         }
         self.window.center = CGPointMake(px, py);
 
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkPhysicalOrientation) userInfo:nil repeats:YES];
+        // 启动最安全的系统界面方向只读轮询
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkSystemOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
 
-- (void)checkPhysicalOrientation {
+// 极其安全的系统界面方向探测法（不挂监听，只读属性）
+- (void)checkSystemOrientation {
     if (self.window.hidden || self.isHiddenState) return;
     
-    CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    CGFloat targetAngle = 0;
+    long long sysOrientation = 1; // 默认竖屏
     
-    if (screenSize.width > screenSize.height) {
-        UIDeviceOrientation deviceOri = [[UIDevice currentDevice] orientation];
-        
-        if (deviceOri == UIDeviceOrientationLandscapeLeft) {
-            targetAngle = M_PI_2; 
-        } else if (deviceOri == UIDeviceOrientationLandscapeRight) {
-            targetAngle = -M_PI_2; 
-        } else {
-            return; 
+    // 通过运行时动态获取 FBS 方向，不初始化 Observer，防止崩溃
+    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+    if (FBSClass) {
+        id observer = [[FBSClass alloc] init];
+        SEL sel = NSSelectorFromString(@"activeOrientation");
+        if ([observer respondsToSelector:sel]) {
+            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
         }
+    } else {
+        // 如果 FBS 失效，退回传统的 Scene 宽高判定
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *activeScene = (UIWindowScene *)scene;
+                CGRect bounds = activeScene.coordinateSpace.bounds;
+                if (bounds.size.width > bounds.size.height) sysOrientation = 3; // 强行当作横屏
+            }
+        }
+    }
+
+    CGFloat targetAngle = 0;
+    if (sysOrientation == 3) {
+        targetAngle = M_PI_2;
+    } else if (sysOrientation == 4) {
+        targetAngle = -M_PI_2;
     } else {
         targetAngle = 0;
     }
@@ -345,17 +360,14 @@ void simulateVolumeDown(void) {
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
         
-        // 回归最原始的位移，手指怎么滑，球就怎么走
         CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
-        // 取最大的物理屏幕尺寸，彻底解决横屏时只能拖一半的毛病
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         CGFloat screenWidth = MAX(screenBounds.size.width, screenBounds.size.height);
         CGFloat screenHeight = MAX(screenBounds.size.width, screenBounds.size.height);
         
-        // 如果横屏了，包围盒的宽高是对调的
         CGFloat winW = self.window.bounds.size.width;
         CGFloat winH = self.window.bounds.size.height;
         CGFloat ballW = isRotated ? winH : winW;
