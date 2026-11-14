@@ -105,7 +105,6 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 核心：启动硬件陀螺仪
         self.motionManager = [[CMMotionManager alloc] init];
         if (self.motionManager.isAccelerometerAvailable) {
             [self.motionManager startAccelerometerUpdates];
@@ -114,7 +113,7 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 根据物理重力严格判断是否横屏
+// 核心修改：加入了滞回判定和极高阈值，极其防抖！
 - (void)checkMotion {
     if (self.window.hidden) return;
     
@@ -124,25 +123,41 @@ void simulateVolumeDown(void) {
     double x = data.acceleration.x;
     double y = data.acceleration.y;
     
-    CGFloat targetAngle = 0;
+    CGFloat targetAngle = self.currentAngle;
     
-    // 0.8 代表倾斜超过约 53 度。只有彻底横过来，数值才会接近 1.0
-    if (x < -0.8) {
-        // 彻底横屏向左
-        targetAngle = M_PI_2;
-    } else if (x > 0.8) {
-        // 彻底横屏向右
-        targetAngle = -M_PI_2;
-    } else if (y > 0.8) {
-        // 彻底倒置
-        targetAngle = M_PI;
-    } else {
-        // 竖屏或轻微倾斜
-        targetAngle = 0;
+    // 如果当前是竖屏状态
+    if (fabs(self.currentAngle) < 0.1) {
+        // 把阈值拉高到 0.93 (约倾斜 68 度以上才转)，必须非常用力地横过来才触发
+        if (x < -0.93) {
+            targetAngle = M_PI_2;
+        } else if (x > 0.93) {
+            targetAngle = -M_PI_2;
+        } else if (y > 0.93) {
+            targetAngle = M_PI;
+        }
+    } 
+    // 如果当前是横屏向左 (M_PI_2)
+    else if (self.currentAngle > 1.0) {
+        // 只有当你把手机放平，或者回正到差不多 24 度以内，才转回竖屏
+        if (x > -0.4) {
+            targetAngle = 0;
+        }
+    } 
+    // 如果当前是横屏向右 (-M_PI_2)
+    else if (self.currentAngle < -1.0) {
+        if (x < 0.4) {
+            targetAngle = 0;
+        }
+    }
+    // 倒置状态
+    else if (self.currentAngle > 3.0) {
+        if (y < 0.4) {
+            targetAngle = 0;
+        }
     }
     
-    // 只有当角度明显变化时才执行动画，防止抖动
-    if (fabs(self.currentAngle - targetAngle) > 0.1) {
+    // 如果判定需要旋转，才执行动画
+    if (targetAngle != self.currentAngle) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
@@ -169,7 +184,6 @@ void simulateVolumeDown(void) {
 
 - (void)btnTapped {
     if (self.window.hidden) return;
-    // 修复了这里的拼写错误
     [self.hapticGenerator impactOccurred];
     [self.hapticGenerator prepare]; 
     simulateVolumeDown();
