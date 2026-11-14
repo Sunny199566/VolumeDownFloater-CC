@@ -82,8 +82,11 @@ void simulateVolumeDown(void) {
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 60, 85)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
+        // 【核心魔法】：把底层窗口放大到 2000x2000，彻底撑爆竖屏坐标限制！
+        self.window.frame = CGRectMake(0, 0, 2000, 2000);
+        self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [FloaterViewController new];
@@ -107,6 +110,8 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
+        // 固定在 2000x2000 窗口的正中心
+        self.mainContainer.center = CGPointMake(1000, 1000);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -147,23 +152,20 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
-        self.timeBottomLabel.adjustsFontSizeToFitWidth = YES;
+        self.timeBottomLabel.adjustsTimeToFitWidth = YES;
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
         
-        CGFloat px = 20, py = 150;
+        // 读取上次保存的位置，默认在窗口中心(1000, 1000)
+        CGFloat px = 1000, py = 1000;
         NSString *pxStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" encoding:NSUTF8StringEncoding error:nil];
         NSString *pyStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" encoding:NSUTF8StringEncoding error:nil];
         if (pxStr.length > 0 && pyStr.length > 0) {
-            CGFloat savedX = [pxStr floatValue];
-            CGFloat savedY = [pyStr floatValue];
-            if (savedX > 0 && savedX < [UIScreen mainScreen].bounds.size.width && savedY > 0 && savedY < [UIScreen mainScreen].bounds.size.height) {
-                px = savedX;
-                py = savedY;
-            }
+            px = [pxStr floatValue];
+            py = [pyStr floatValue];
         }
-        self.window.center = CGPointMake(px, py);
+        self.mainContainer.center = CGPointMake(px, py);
 
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
 
@@ -251,11 +253,9 @@ void simulateVolumeDown(void) {
         if (colorStr.length == 0) colorStr = @"red";
 
         CGFloat totalHeight = size + 25;
-        CGPoint oldCenter = self.window.center;
         
-        self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
-        
-        self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
+        // 【重要】这里不再修改 window 的 frame，只调整容器和按钮的大小
+        self.mainContainer.bounds = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
         self.floatBtn.alpha = alpha;
@@ -355,42 +355,48 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 核心修复：精确边界计算，防止右边飞出去
+// 终极无敌边界计算（以2000x2000窗口中心为基准）
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
-        CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+        
+        // 直接移动容器，因为窗口有2000大，绝对不会被系统截断
+        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
-        // 获取真实的物理屏幕尺寸
         CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat physicalMaxDim = MAX(screenBounds.size.width, screenBounds.size.height);
-        CGFloat physicalMinDim = MIN(screenBounds.size.width, screenBounds.size.height);
+        CGFloat screenW = screenBounds.size.width;
+        CGFloat screenH = screenBounds.size.height;
         
-        // 如果球是横屏，绝对宽度就是长边；如果球是竖屏，绝对宽度就是短边
-        CGFloat absoluteWidth = isRotated ? physicalMaxDim : physicalMinDim;
-        CGFloat absoluteHeight = isRotated ? physicalMinDim : physicalMaxDim;
+        CGFloat maxW = MAX(screenW, screenH);
+        CGFloat minW = MIN(screenW, screenH);
         
-        // 获取窗口的长宽（考虑旋转的影响）
-        CGFloat ballWidth = isRotated ? self.window.bounds.size.height : self.window.bounds.size.width;
-        CGFloat ballHeight = isRotated ? self.window.bounds.size.width : self.window.bounds.size.height;
+        CGFloat visualW = isRotated ? maxW : minW;
+        CGFloat visualH = isRotated ? minW : maxW;
         
-        CGFloat minX = ballWidth / 2.0 + 10.0;
-        CGFloat maxX = absoluteWidth - ballWidth / 2.0 - 10.0;
-        CGFloat minY = ballHeight / 2.0 + 20.0; 
-        CGFloat maxY = absoluteHeight - ballHeight / 2.0 - 10.0;
+        CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
+        CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
+        
+        // 窗口的正中心是 1000
+        CGFloat centerX = 1000;
+        CGFloat centerY = 1000;
+        
+        CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
+        CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
+        CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
+        CGFloat maxY = centerY + visualH / 2.0 - ballH / 2.0 - 10.0;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
         newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
         
-        self.window.center = newCenter;
+        self.mainContainer.center = newCenter;
         [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
