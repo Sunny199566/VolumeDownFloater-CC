@@ -56,15 +56,9 @@
     self.titleTextField.placeholder = @"输入你想显示的文字";
     self.titleTextField.textAlignment = NSTextAlignmentCenter;
     
-    // 从全局配置读取文字 (非 ARC 安全写法)
-    NSString *currentTitle = @"音量-";
-    CFStringRef titleRef = CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
-    if (titleRef) {
-        currentTitle = [NSString stringWithString:(__bridge NSString *)titleRef];
-        CFRelease(titleRef);
-    }
-    self.titleTextField.text = currentTitle;
-    
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
+    NSString *currentTitle = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    self.titleTextField.text = (currentTitle && currentTitle.length > 0) ? currentTitle : @"音量-";
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
     [vc.view addSubview:self.titleTextField];
 
@@ -98,7 +92,6 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"toggleState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [self syncState:sender.isOn];
-    
     UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [gen impactOccurred];
 }
@@ -107,11 +100,10 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"timeState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    CFPreferencesSetAppValue(CFSTR("showtime"), sender.isOn ? kCFBooleanTrue : kCFBooleanFalse, CFSTR("com.yourname.volumedownfloater"));
-    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
+    [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
-    
     UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [gen impactOccurred];
 }
@@ -120,8 +112,8 @@
     NSString *newText = sender.text;
     if (newText.length == 0) newText = @" ";
     
-    CFPreferencesSetAppValue(CFSTR("title"), (__bridge CFStringRef)newText, CFSTR("com.yourname.volumedownfloater"));
-    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
+    [newText writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
@@ -139,19 +131,16 @@
     UIImage *image = info[UIImagePickerControllerOriginalImage];
     if (image) {
         NSData *imgData = UIImageJPEGRepresentation(image, 0.8);
-        NSString *base64String = [imgData base64EncodedStringWithOptions:0];
-        
-        CFPreferencesSetAppValue(CFSTR("custom_bg"), (__bridge CFStringRef)base64String, CFSTR("com.yourname.volumedownfloater"));
-        CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
+        NSString *path = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
+        [imgData writeToFile:path atomically:YES];
         
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
     }
 }
 
 - (void)clearImage {
-    CFPreferencesSetAppValue(CFSTR("custom_bg"), NULL, CFSTR("com.yourname.volumedownfloater"));
-    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
-    
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
