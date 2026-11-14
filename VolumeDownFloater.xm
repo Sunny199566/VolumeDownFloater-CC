@@ -39,14 +39,17 @@ void simulateVolumeDown(void) {
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel;
+@property (strong, nonatomic) UILabel *titleLabel;       // 球体内部的文字
+@property (strong, nonatomic) UILabel *timeBottomLabel;  // 球体下方的时间
+@property (strong, nonatomic) UIImageView *bgImageView;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 @property (nonatomic, assign) CGFloat currentAngle;
+@property (strong, nonatomic) NSTimer *timeTimer;
 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
-- (void)updateTitle;
+- (void)updateUI;
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
 @end
 
@@ -67,12 +70,14 @@ void simulateVolumeDown(void) {
         }
         
         CGFloat btnSize = 60.0;
+        CGFloat totalHeight = 85.0; // 留出底下时间的位置
+        
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, btnSize, btnSize)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, btnSize, totalHeight)]; }
         
-        self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
+        self.window.frame = CGRectMake(20, 150, btnSize, totalHeight);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         
@@ -83,6 +88,7 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
+        // ===== 1. 创建球体 =====
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
@@ -90,38 +96,95 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        // 1. 单击触发音量减
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
-        
-        // 2. 拖拽移动位置
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
-        // 3. 长按 0.5 秒手动旋转（完美替代双击防误触）
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
+        // 球体背景图
+        self.bgImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
+        self.bgImageView.contentMode = UIViewContentModeScaleAspectFill;
+        self.bgImageView.layer.cornerRadius = btnSize / 2.0;
+        self.bgImageView.layer.masksToBounds = YES;
+        self.bgImageView.userInteractionEnabled = NO;
+        [self.floatBtn addSubview:self.bgImageView];
+        
+        // 球体内部文字（居中）
         self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.titleLabel.textColor = [UIColor whiteColor];
         self.titleLabel.textAlignment = NSTextAlignmentCenter;
-        self.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        self.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
         self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
-        [self updateTitle];
+        // ===== 2. 创建球体下方的时间 =====
+        self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(-10, btnSize + 2, btnSize + 20, 20)];
+        self.timeBottomLabel.textColor = [UIColor whiteColor];
+        self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
+        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:12];
+        self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5]; // 半透明黑底
+        self.timeBottomLabel.layer.cornerRadius = 5;
+        self.timeBottomLabel.layer.masksToBounds = YES;
+        self.timeBottomLabel.hidden = YES; // 默认隐藏
+        [self.window.rootViewController.view addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
+        [self updateUI];
         
-        // 纯 UI 界面判定（读取前台界面宽高，自动横屏）
         [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkUIOrientation) userInfo:nil repeats:YES];
     });
 }
 
-// 长按旋转逻辑
+- (void)updateUI {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *imgPath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_bg.png";
+        if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
+            self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
+            self.bgImageView.hidden = NO;
+            self.floatBtn.backgroundColor = [UIColor clearColor];
+        } else {
+            self.bgImageView.hidden = YES;
+            self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
+        }
+        
+        NSString *timePath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_showtime.txt";
+        NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
+        BOOL showTime = [timeStatus isEqualToString:@"1"];
+        
+        [self.timeTimer invalidate];
+        self.timeTimer = nil;
+        
+        if (showTime) {
+            self.titleLabel.hidden = YES;
+            self.timeBottomLabel.hidden = NO;
+            [self updateTimeText];
+            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+        } else {
+            self.titleLabel.hidden = NO;
+            self.timeBottomLabel.hidden = YES;
+            
+            NSString *titlePath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
+            NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
+            if (!title || title.length == 0) {
+                title = @"音量-";
+            }
+            self.titleLabel.text = title;
+        }
+    });
+}
+
+- (void)updateTimeText {
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"HH:mm:ss"];
+    self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
+}
+
+// 核心修复：长按旋转时，时间标签跟着一起转！
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    // 只有按下的一瞬间才触发，防止按住不放一直转
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
         if (self.currentAngle >= M_PI * 2) {
@@ -130,6 +193,9 @@ void simulateVolumeDown(void) {
         
         [UIView animateWithDuration:0.3 animations:^{
             self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+            self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
+            // 加入时间标签的旋转
+            self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
         
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -137,7 +203,7 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 纯 UI 判定：如果当前界面变横了，自动转横
+// 核心修复：自动横屏时，时间标签也跟着一起转！
 - (void)checkUIOrientation {
     if (self.window.hidden) return;
     
@@ -147,28 +213,19 @@ void simulateVolumeDown(void) {
             CGRect bounds = activeScene.coordinateSpace.bounds;
             
             if (bounds.size.width > bounds.size.height) {
-                // 界面变宽，说明进入了横屏视频等，自动转到横屏
                 if (fabs(self.currentAngle - (-M_PI_2)) > 0.1) {
                     self.currentAngle = -M_PI_2;
                     [UIView animateWithDuration:0.3 animations:^{
                         self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+                        self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
+                        // 加入时间标签的旋转
+                        self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
                     }];
                 }
                 return;
             }
         }
     }
-}
-
-- (void)updateTitle {
-    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
-    NSString *title = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    if (!title || title.length == 0) {
-        title = @"音量-";
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.titleLabel.text = title;
-    });
 }
 
 - (void)setVisibility:(BOOL)visible {
@@ -188,16 +245,17 @@ void simulateVolumeDown(void) {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
     
-    CGFloat btnRadius = self.window.bounds.size.width / 2.0;
+    CGFloat windowWidth = self.window.bounds.size.width;
+    CGFloat windowHeight = self.window.bounds.size.height;
+    
     CGRect screenBounds = [UIScreen mainScreen].bounds;
     CGFloat screenWidth = screenBounds.size.width;
     CGFloat screenHeight = screenBounds.size.height;
     
-    CGFloat padding = 10.0;
-    CGFloat minX = btnRadius + padding;
-    CGFloat maxX = screenWidth - btnRadius - padding;
-    CGFloat minY = btnRadius + 50.0;
-    CGFloat maxY = screenHeight - btnRadius - 30.0;
+    CGFloat minX = windowWidth / 2.0 + 10.0;
+    CGFloat maxX = screenWidth - windowWidth / 2.0 - 10.0;
+    CGFloat minY = windowHeight / 2.0 + 20.0; 
+    CGFloat maxY = screenHeight - windowHeight / 2.0 - 10.0;
     
     newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
     newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
@@ -215,13 +273,13 @@ static void hideFloater(CFNotificationCenterRef center, void *observer, CFString
     [[FloaterManager sharedInstance] setVisibility:NO];
 }
 
-static void updateText(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] updateTitle];
+static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] updateUI];
 }
 
 __attribute__((constructor)) static void initFloater() {
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateText, CFSTR("com.yourname.volumedownfloater/update_text"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
