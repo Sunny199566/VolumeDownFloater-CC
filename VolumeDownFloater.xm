@@ -96,11 +96,17 @@ void simulateVolumeDown(void) {
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
+        // 修复手势冲突：添加拖拽手势
+        UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        [self.floatBtn addGestureRecognizer:panGesture];
+        
+        // 添加长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
+        // 让长按手势不要干扰拖拽手势
+        [longPress requireGestureRecognizerToFail:panGesture];
         
         [self.mainContainer addSubview:self.floatBtn];
         
@@ -129,11 +135,19 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 初始化位置（读取记忆）
+        // 初始化位置（如果之前卡在边缘，强制重置回默认位置）
+        CGFloat px = 20, py = 150;
         NSString *pxStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" encoding:NSUTF8StringEncoding error:nil];
         NSString *pyStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" encoding:NSUTF8StringEncoding error:nil];
-        CGFloat px = (pxStr && pxStr.length > 0) ? [pxStr floatValue] : 20;
-        CGFloat py = (pyStr && pyStr.length > 0) ? [pyStr floatValue] : 150;
+        if (pxStr.length > 0 && pyStr.length > 0) {
+            CGFloat savedX = [pxStr floatValue];
+            CGFloat savedY = [pyStr floatValue];
+            // 检查坐标是否合理，防止旧版 bug 留下的无效坐标导致 UI 消失
+            if (savedX > 0 && savedX < [UIScreen mainScreen].bounds.size.width && savedY > 0 && savedY < [UIScreen mainScreen].bounds.size.height) {
+                px = savedX;
+                py = savedY;
+            }
+        }
         self.window.center = CGPointMake(px, py);
 
         [self updateUI];
@@ -155,8 +169,18 @@ void simulateVolumeDown(void) {
         NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
         if (colorStr.length == 0) colorStr = @"red";
 
-        // 2. 应用大小与透明度
-        self.mainContainer.frame = CGRectMake(0, 0, size, size + 25);
+        // ====== 修复核心：动态调整 Window 和 Container 的大小，确保点击区域和视觉完全一致 ======
+        CGFloat totalHeight = size + 25;
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        
+        // 记录旧的中心点
+        CGPoint oldCenter = self.window.center;
+        
+        // 修改窗口大小
+        self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
+        
+        // 同步容器大小
+        self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
         self.floatBtn.alpha = alpha;
@@ -243,7 +267,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 拖动逻辑（已删除磁吸功能，只保留位置记忆）
+// 拖动逻辑
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -270,7 +294,7 @@ void simulateVolumeDown(void) {
     self.window.center = newCenter;
     [pan setTranslation:CGPointZero inView:self.window];
 
-    // 松手时只保存坐标，不再磁吸
+    // 松手时只保存坐标
     if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
         NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
         NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
