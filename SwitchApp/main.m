@@ -4,8 +4,8 @@
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UISwitch *toggleSwitch;
 @property (strong, nonatomic) UISwitch *timeSwitch;
-@property (strong, nonatomic) UISwitch *secureSwitch; // 新增防截图开关
 @property (strong, nonatomic) UITextField *titleTextField;
+@property (strong, nonatomic) UISlider *hapticSlider;
 @end
 
 @implementation AppDelegate
@@ -43,23 +43,13 @@
     [self.timeSwitch addTarget:self action:@selector(timeSwitchChanged:) forControlEvents:UIControlEventValueChanged];
     [vc.view addSubview:self.timeSwitch];
 
-    // 3. 防截图隐藏
-    UILabel *secureLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 250, 250, 30)];
-    secureLabel.text = @"截图时自动隐藏(防截图)";
-    secureLabel.font = [UIFont systemFontOfSize:18];
-    [vc.view addSubview:secureLabel];
-    self.secureSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 250, 51, 31)];
-    self.secureSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"secureState"];
-    [self.secureSwitch addTarget:self action:@selector(secureSwitchChanged:) forControlEvents:UIControlEventValueChanged];
-    [vc.view addSubview:self.secureSwitch];
-
-    // 4. 文字修改
-    UILabel *textLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 300, 200, 30)];
+    // 3. 文字修改
+    UILabel *textLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 250, 200, 30)];
     textLabel.text = @"悬浮球内部文字";
     textLabel.font = [UIFont systemFontOfSize:18];
     [vc.view addSubview:textLabel];
 
-    self.titleTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 340, self.window.bounds.size.width - 80, 40)];
+    self.titleTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 290, self.window.bounds.size.width - 80, 40)];
     self.titleTextField.borderStyle = UITextBorderStyleRoundedRect;
     self.titleTextField.placeholder = @"输入你想显示的文字";
     self.titleTextField.textAlignment = NSTextAlignmentCenter;
@@ -70,9 +60,26 @@
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
     [vc.view addSubview:self.titleTextField];
 
-    // 5. 选择自定义图片
+    // 4. 震动强度调节
+    UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 350, 200, 30)];
+    hapticLabel.text = @"单击震动强度";
+    hapticLabel.font = [UIFont systemFontOfSize:18];
+    [vc.view addSubview:hapticLabel];
+
+    self.hapticSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 390, self.window.bounds.size.width - 80, 30)];
+    self.hapticSlider.minimumValue = 0.0;
+    self.hapticSlider.maximumValue = 1.0;
+    
+    NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
+    NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
+    self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 0.8; 
+    
+    [self.hapticSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
+    [vc.view addSubview:self.hapticSlider];
+
+    // 5. 选择图片
     UIButton *imageBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    imageBtn.frame = CGRectMake(40, 400, self.window.bounds.size.width - 80, 45);
+    imageBtn.frame = CGRectMake(40, 450, self.window.bounds.size.width - 80, 45);
     [imageBtn setTitle:@"从相册选择自定义图标" forState:UIControlStateNormal];
     imageBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     imageBtn.backgroundColor = [UIColor systemBlueColor];
@@ -83,7 +90,7 @@
 
     // 6. 清除图片
     UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    clearBtn.frame = CGRectMake(40, 460, self.window.bounds.size.width - 80, 45);
+    clearBtn.frame = CGRectMake(40, 510, self.window.bounds.size.width - 80, 45);
     [clearBtn setTitle:@"清除自定义图标" forState:UIControlStateNormal];
     clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     clearBtn.backgroundColor = [UIColor systemRedColor];
@@ -100,8 +107,7 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"toggleState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [self syncState:sender.isOn];
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [gen impactOccurred];
+    [self triggerTestHaptic];
 }
 
 - (void)timeSwitchChanged:(UISwitch *)sender {
@@ -110,18 +116,26 @@
     NSString *path = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
     [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [gen impactOccurred];
+    [self triggerTestHaptic];
 }
 
-- (void)secureSwitchChanged:(UISwitch *)sender {
-    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"secureState"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_secure.txt";
-    [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+- (void)hapticChanged:(UISlider *)sender {
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
+    NSString *valStr = [NSString stringWithFormat:@"%f", sender.value];
+    [valStr writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [gen impactOccurred];
+    
+    [self triggerTestHaptic];
+}
+
+- (void)triggerTestHaptic {
+    if (@available(iOS 13.0, *)) {
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [gen impactOccurredWithIntensity:self.hapticSlider.value];
+    } else {
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [gen impactOccurred];
+    }
 }
 
 - (void)textChanged:(UITextField *)sender {
