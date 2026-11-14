@@ -119,7 +119,6 @@
     if (!self.currentColor || self.currentColor.length == 0) self.currentColor = @"red";
 
     self.colorButtons = [NSMutableArray array];
-    NSArray *colors = @[@"red", @"blue", @"green", @"black", @"clear"];
     NSArray *uiColors = @[[UIColor systemRedColor], [UIColor systemBlueColor], [UIColor systemGreenColor], [UIColor blackColor], [UIColor lightGrayColor]];
     
     for (int i = 0; i < 5; i++) {
