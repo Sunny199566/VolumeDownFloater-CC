@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -41,6 +42,10 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (strong, nonatomic) CMMotionManager *motionManager;
+@property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) CGFloat targetAngle;
+@property (nonatomic, assign) NSInteger stableCount;
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
@@ -100,41 +105,56 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(deviceOrientationDidChange) name:UIDeviceOrientationDidChangeNotification object:nil];
+        self.currentAngle = 0;
+        self.targetAngle = 0;
+        self.stableCount = 0;
+        
+        // 彻底抛弃系统的UI旋转，直接开启物理陀螺仪！
+        self.motionManager = [[CMMotionManager alloc] init];
+        if (self.motionManager.isDeviceMotionAvailable) {
+            [self.motionManager startDeviceMotionUpdates];
+            // 每 0.1 秒检查一次物理重力
+            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
+        }
     });
 }
 
-- (void)deviceOrientationDidChange {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyRotation) object:nil];
-    [self performSelector:@selector(applyRotation) withObject:nil afterDelay:0.3];
-}
-
-// 核心修复：修正了旋转的方向，并且去掉了倒立旋转
-- (void)applyRotation {
+- (void)checkMotion {
     if (self.window.hidden) return;
     
-    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
-    CGFloat angle = 0;
+    CMDeviceMotion *motion = self.motionManager.deviceMotion;
+    if (!motion) return;
     
-    if (orientation == UIDeviceOrientationLandscapeLeft) {
-        // 手机向左横过来，文字应该顺时针转90度
-        angle = M_PI_2;
-    } else if (orientation == UIDeviceOrientationLandscapeRight) {
-        // 手机向右横过来，文字应该逆时针转90度
-        angle = -M_PI_2;
-    } else if (orientation == UIDeviceOrientationPortrait) {
-        angle = 0;
-    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
-        angle = 0; // 倒立时，文字也保持正立，不跟着倒过来
+    double x = motion.gravity.x;
+    double y = motion.gravity.y;
+    
+    CGFloat newAngle = 0;
+    
+    // 物理判定：如果横向的倾斜度大于竖向，说明手机横过来了
+    if (fabs(x) > fabs(y)) {
+        if (x < 0) {
+            newAngle = M_PI_2; // 向左横屏
+        } else {
+            newAngle = -M_PI_2; // 向右横屏
+        }
     } else {
-        // 平放桌面等情况，保持现状不动
-        return;
+        newAngle = 0; // 竖屏
     }
     
-    [UIView animateWithDuration:0.3 animations:^{
-        self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
-    }];
+    // 如果算出来的目标角度和当前的记录不一样，进入防抖缓冲期
+    if (fabs(newAngle - self.targetAngle) > 0.1) {
+        self.targetAngle = newAngle;
+        self.stableCount = 0;
+    } else {
+        self.stableCount++;
+        // 必须稳定持续 0.3 秒 (0.1s * 3次) 才会真正执行旋转动画
+        if (self.stableCount == 3 && fabs(self.currentAngle - self.targetAngle) > 0.1) {
+            self.currentAngle = self.targetAngle;
+            [UIView animateWithDuration:0.3 animations:^{
+                self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+            }];
+        }
+    }
 }
 
 - (void)updateTitle {
@@ -151,9 +171,6 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self applyRotation];
-        }
     });
 }
 
