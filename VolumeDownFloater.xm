@@ -148,7 +148,7 @@ void simulateVolumeDown(void) {
             self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         }
         
-        // 2. 读取时间开关
+        // 2. 处理时间开关
         NSString *timePath = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
         NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
@@ -157,21 +157,21 @@ void simulateVolumeDown(void) {
         self.timeTimer = nil;
         
         if (showTime) {
-            self.titleLabel.hidden = YES;
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
             self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
         } else {
-            self.titleLabel.hidden = NO;
             self.timeBottomLabel.hidden = YES;
-            
-            NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
-            NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
-            if (!title || title.length == 0) {
-                title = @"音量-";
-            }
-            self.titleLabel.text = title;
         }
+        
+        // 3. 读取内部文字（核心修改：不管开不开时间，文字始终显示）
+        NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
+        NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
+        if (!title || title.length == 0) {
+            title = @"音量-";
+        }
+        self.titleLabel.text = title;
+        self.titleLabel.hidden = NO; // 永远不隐藏文字
     });
 }
 
