@@ -82,7 +82,7 @@ void simulateVolumeDown(void) {
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
-        // 2000x2000 的窗口，彻底跨越系统边界限制
+        // 2000大窗口，完美跨越中间边界
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
@@ -307,7 +307,7 @@ void simulateVolumeDown(void) {
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
-    // 移除高级震动，换回底层安全引擎，解决发热和音量回弹
+    // 换回最稳定的系统震动，防发热
     if (@available(iOS 13.0, *)) {
         UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
         if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
@@ -328,15 +328,14 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 核心修复：直接使用系统给的 translation，不加任何人为映射
+// 终极跟手：直接读取相对于当前旋转后容器(Superview)的位移
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        // 获取手指在当前 window 里的真实物理滑动量
-        CGPoint translation = [pan translationInView:self.window];
+        // 关键：获取相对于父视图（已旋转）的位移
+        CGPoint translation = [pan translationInView:self.mainContainer.superview];
         
-        // 直接加到容器中心点上，系统底层已经帮我们把横屏的方向翻转好了
         CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
@@ -348,19 +347,19 @@ void simulateVolumeDown(void) {
         CGFloat maxW = MAX(screenW, screenH);
         CGFloat minW = MIN(screenW, screenH);
         
-        // 可视屏幕的宽高
+        // 可视屏幕范围
         CGFloat visualW = isRotated ? maxW : minW;
         CGFloat visualH = isRotated ? minW : maxW;
         
-        // 球的实际宽高
+        // 球尺寸
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 2000x2000 的大窗口，中心点是 (1000, 1000)
+        // 2000x2000 的窗口，可视中心是 (1000, 1000)
         CGFloat centerX = 1000;
         CGFloat centerY = 1000;
         
-        // 绝对边界限制，确保不管窗口多大，球永远卡在可视屏幕内
+        // 强行限制边界，绝对不让球飞出屏幕可视区
         CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
         CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
         CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
@@ -370,7 +369,7 @@ void simulateVolumeDown(void) {
         newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
         
         self.mainContainer.center = newCenter;
-        [pan setTranslation:CGPointZero inView:self.window];
+        [pan setTranslation:CGPointZero inView:self.mainContainer.superview];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
         NSString *pxStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.x];
         NSString *pyStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.y];
