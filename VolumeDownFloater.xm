@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -41,7 +42,8 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (nonatomic, assign) UIInterfaceOrientation currentOrientation; // 记录当前方向防抖
+@property (strong, nonatomic) CMMotionManager *motionManager;
+@property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
@@ -101,45 +103,51 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        self.currentOrientation = UIInterfaceOrientationPortrait;
+        self.currentAngle = 0;
         
-        // 核心：用定时器每隔 0.5 秒轮询一次真实界面方向。
-        // 这样只有界面彻底转了，它才反应，彻底告别“稍微倾斜就转”的误触！
-        [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAndRotate) userInfo:nil repeats:YES];
+        // 核心：启动硬件陀螺仪
+        self.motionManager = [[CMMotionManager alloc] init];
+        if (self.motionManager.isAccelerometerAvailable) {
+            [self.motionManager startAccelerometerUpdates];
+            [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
+        }
     });
 }
 
-- (void)checkAndRotate {
+// 根据物理重力严格判断是否横屏
+- (void)checkMotion {
     if (self.window.hidden) return;
     
-    UIInterfaceOrientation realOrientation = UIInterfaceOrientationPortrait;
+    CMAccelerometerData *data = self.motionManager.accelerometerData;
+    if (!data) return;
     
-    // 获取系统底层的真实界面方向（仅 iOS 13+ 有效）
-    if (@available(iOS 13.0, *)) {
-        if (self.window.windowScene) {
-            realOrientation = self.window.windowScene.interfaceOrientation;
-        }
+    double x = data.acceleration.x;
+    double y = data.acceleration.y;
+    
+    CGFloat targetAngle = 0;
+    
+    // 0.8 代表倾斜超过约 53 度。只有彻底横过来，数值才会接近 1.0
+    if (x < -0.8) {
+        // 彻底横屏向左
+        targetAngle = M_PI_2;
+    } else if (x > 0.8) {
+        // 彻底横屏向右
+        targetAngle = -M_PI_2;
+    } else if (y > 0.8) {
+        // 彻底倒置
+        targetAngle = M_PI;
     } else {
-        realOrientation = [UIApplication sharedApplication].statusBarOrientation;
-    }
-
-    // 如果方向和上次记录的一样，就不做任何操作，防止画面闪烁
-    if (realOrientation == self.currentOrientation) return;
-    self.currentOrientation = realOrientation;
-
-    CGFloat angle = 0;
-    if (realOrientation == UIInterfaceOrientationLandscapeLeft) {
-        angle = -M_PI_2;
-    } else if (realOrientation == UIInterfaceOrientationLandscapeRight) {
-        angle = M_PI_2;
-    } else if (realOrientation == UIInterfaceOrientationPortraitUpsideDown) {
-        angle = M_PI;
+        // 竖屏或轻微倾斜
+        targetAngle = 0;
     }
     
-    // 只转文字，背景球不转
-    [UIView animateWithDuration:0.3 animations:^{
-        self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
-    }];
+    // 只有当角度明显变化时才执行动画，防止抖动
+    if (fabs(self.currentAngle - targetAngle) > 0.1) {
+        self.currentAngle = targetAngle;
+        [UIView animateWithDuration:0.3 animations:^{
+            self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
+        }];
+    }
 }
 
 - (void)updateTitle {
@@ -161,7 +169,7 @@ void simulateVolumeDown(void) {
 
 - (void)btnTapped {
     if (self.window.hidden) return;
-    [self.hapticGenerator impactOccurred];
+    [self.hapticFeedbackGenerator impactOccurred];
     [self.hapticGenerator prepare]; 
     simulateVolumeDown();
 }
