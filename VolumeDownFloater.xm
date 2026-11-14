@@ -31,7 +31,7 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// 【核心修复1：创建一个触摸穿透的视图，绝不遮挡桌面】
+// 触摸穿透视图
 @interface PassThroughView : UIView
 @end
 @implementation PassThroughView
@@ -41,6 +41,7 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// 锁定竖屏的控制器，防止跟随系统乱转
 @interface FloaterViewController : UIViewController
 @end
 @implementation FloaterViewController
@@ -64,7 +65,7 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
 @property (nonatomic, assign) NSInteger lastOrientationState;
-@property (nonatomic, assign) CGPoint lastTouchPoint; // 记录手指绝对坐标
+@property (nonatomic, assign) CGPoint lastTouchPoint;
 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
@@ -96,6 +97,7 @@ void simulateVolumeDown(void) {
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
+        // 保持超大窗口，避免边界被系统截断，但不随意移动它
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
@@ -103,7 +105,6 @@ void simulateVolumeDown(void) {
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [FloaterViewController new];
         
-        // 读取状态
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.window.hidden = ![showStr isEqualToString:@"1"];
@@ -117,7 +118,7 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        self.mainContainer.center = CGPointMake(1000, 1000);
+        self.mainContainer.center = CGPointMake(1000, 1000); // 2000x2000窗口的绝对中心点
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -187,29 +188,52 @@ void simulateVolumeDown(void) {
         SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
         if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
             long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
-            if (activeOri == 3 || activeOri == 4) {
+            if (activeOri >= 1 && activeOri <= 4) {
                 sysOrientation = activeOri;
             }
         }
     }
     
-    NSInteger currentState = (sysOrientation == 3 || sysOrientation == 4) ? 2 : 1;
+    NSInteger currentState = 1;
+    if (sysOrientation == 3 || sysOrientation == 4) currentState = 2;
     
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
+        // 修复：区分横屏左和横屏右，否则有一个方向文字会倒过来
         CGFloat targetAngle = 0;
-        if (currentState == 2) {
-            targetAngle = M_PI_2;
-        } else {
-            targetAngle = 0;
-        }
+        if (sysOrientation == 3) targetAngle = -M_PI_2; // 横屏向右
+        else if (sysOrientation == 4) targetAngle = M_PI_2; // 横屏向左
         
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        } completion:^(BOOL finished) {
+            [self clampCurrentPosition]; // 旋转后立刻把球拉回安全区域
         }];
     }
+}
+
+// 核心修复：边界限制不要用 MAX/MIN 乱换，直接使用物理宽度
+- (void)clampCurrentPosition {
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
+    
+    BOOL isRotated = fabs(self.currentAngle) > 0.1;
+    // 旋转后，球的视觉宽高互换
+    CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
+    CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
+    
+    CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
+    
+    CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
+    CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
+    CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
+    CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
+    
+    CGPoint c = self.mainContainer.center;
+    c.x = MAX(minX, MIN(c.x, maxX));
+    c.y = MAX(minY, MIN(c.y, maxY));
+    self.mainContainer.center = c;
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
@@ -217,10 +241,12 @@ void simulateVolumeDown(void) {
         [self.floatBtn cancelTrackingWithEvent:nil];
         
         self.currentAngle += M_PI_2;
-        if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
+        if (self.currentAngle >= M_PI * 2) self.currentAngle -= M_PI * 2;
         
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        } completion:^(BOOL finished) {
+            [self clampCurrentPosition];
         }];
         
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -335,61 +361,38 @@ void simulateVolumeDown(void) {
             });
         }
     }
-    
     simulateVolumeDown();
 }
 
-// 【核心修复2：使用绝对坐标差值，无视物理边缘截断，横屏完美跟手】
+// 核心修复：取消所有多余的视觉映射，直接用物理 delta 并在完全正确的物理边界内限制
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
-        // 记录按下时的绝对坐标
         self.lastTouchPoint = [pan locationInView:self.window];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        // 获取当前的绝对坐标
         CGPoint currentPoint = [pan locationInView:self.window];
-        
-        // 计算真实物理差值
         CGPoint delta = CGPointMake(currentPoint.x - self.lastTouchPoint.x, currentPoint.y - self.lastTouchPoint.y);
         self.lastTouchPoint = currentPoint;
         
-        // 核心：如果球是横的，把物理位移强行映射到视觉方向
-        CGPoint visualDelta = delta;
-        if (fabs(self.currentAngle) > 1.0) {
-            if (self.currentAngle > 0) { // 顺时针 90 度
-                visualDelta.x = delta.y;
-                visualDelta.y = -delta.x;
-            } else { // 逆时针 90 度
-                visualDelta.x = -delta.y;
-                visualDelta.y = delta.x;
-            }
-        }
+        // 直接加 delta，因为 mainContainer 虽然旋转了，但它的 center 依然是基于 window 的物理坐标
+        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + delta.x, self.mainContainer.center.y + delta.y);
         
-        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + visualDelta.x, self.mainContainer.center.y + visualDelta.y);
+        BOOL isRotated = fabs(self.currentAngle) > 0.1;
         
-        BOOL isRotated = fabs(self.currentAngle) > 1.0;
+        // 强行使用物理屏幕尺寸（iOS 的 UIScreen bounds 无论横竖，宽高永远是竖屏的值，比如 390x844）
+        CGSize screenSize = [UIScreen mainScreen].bounds.size;
         
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenW = screenBounds.size.width;
-        CGFloat screenH = screenBounds.size.height;
-        
-        CGFloat maxW = MAX(screenW, screenH);
-        CGFloat minW = MIN(screenW, screenH);
-        
-        CGFloat visualW = isRotated ? maxW : minW;
-        CGFloat visualH = isRotated ? minW : maxW;
-        
+        // 球旋转后的视觉大小
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 以 2000x2000 窗口正中心 (1000, 1000) 为基准限制边界
-        CGFloat centerX = 1000;
-        CGFloat centerY = 1000;
+        CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
         
-        CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
-        CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
-        CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
-        CGFloat maxY = centerY + visualH / 2.0 - ballH / 2.0 - 10.0;
+        // 计算真实的、不会出界的边界（不要使用 MAX/MIN 互换，直接用 screenSize）
+        CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
+        CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
+        CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
+        CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
         newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
@@ -404,6 +407,14 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// 这里利用 Logos 语法的构造函数（替换你原来的 constructor）
+__attribute__((constructor)) static void initFloater() {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
+}
+
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
@@ -414,11 +425,4 @@ static void hideFloater(CFNotificationCenterRef center, void *observer, CFString
 
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] updateUI];
-}
-
-__attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
