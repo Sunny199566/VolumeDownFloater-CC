@@ -8,7 +8,6 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
 typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
 
-// 模拟音量减
 void simulateVolumeDown(void) {
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!handle) return;
@@ -84,7 +83,8 @@ void simulateVolumeDown(void) {
         self.window.hidden = YES;
 
         self.hapticIntensity = 0.8;
-        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+        // 核心修复：改回 Medium，这样强度调节才会线性生效
+        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
         self.mainContainer = [[UIView alloc] init];
@@ -96,14 +96,12 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        // 核心：按下瞬间立即触发，零延迟！
-        [self.floatBtn addTarget:self action:@selector(handleTouchDown) forControlEvents:UIControlEventTouchDown];
+        [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
-        // 拖拽手势
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        panGesture.cancelsTouchesInView = YES;
         [self.floatBtn addGestureRecognizer:panGesture];
         
-        // 长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
@@ -245,11 +243,9 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 核心：按下瞬间极速触发
-- (void)handleTouchDown {
+- (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
-    // 瞬间震动（使用你设置的强度）
     if (@available(iOS 13.0, *)) {
         [self.hapticGenerator impactOccurredWithIntensity:self.hapticIntensity];
     } else {
@@ -257,7 +253,6 @@ void simulateVolumeDown(void) {
     }
     [self.hapticGenerator prepare]; 
     
-    // 瞬间触发音量减（执行脚本）
     simulateVolumeDown();
 }
 
