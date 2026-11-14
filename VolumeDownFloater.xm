@@ -104,7 +104,6 @@ void simulateVolumeUp(void) {
         self.window.hidden = YES;
 
         self.hapticIntensity = 0.8;
-        // 改为 Heavy (重击感)，配合你的自定义强度，能发挥最大的威力
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
         [self.hapticGenerator prepare];
 
@@ -273,7 +272,6 @@ void simulateVolumeUp(void) {
     });
 }
 
-// 单击：按照你设定的最强力度震动
 - (void)handleSingleTap {
     if (self.window.hidden) return;
     if (@available(iOS 13.0, *)) {
@@ -285,9 +283,62 @@ void simulateVolumeUp(void) {
     simulateVolumeDown();
 }
 
-// 双击：不震动（或者极轻微），防止干扰你对单击重震的判断
 - (void)handleDoubleTap {
     if (self.window.hidden) return;
-    // 双击不震动，纯静音操作，仅恢复音量
     simulateVolumeUp();
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    CGPoint translation = [pan translationInView:self.window];
+    CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+    
+    CGFloat windowWidth = self.window.bounds.size.width;
+    CGFloat windowHeight = self.window.bounds.size.height;
+    
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat screenWidth = screenBounds.size.width;
+    CGFloat screenHeight = screenBounds.size.height;
+    
+    BOOL isRotated = fabs(self.currentAngle) > 1.0;
+    CGFloat effWidth = isRotated ? windowHeight : windowWidth;
+    CGFloat effHeight = isRotated ? windowWidth : windowHeight;
+    
+    CGFloat minX = effWidth / 2.0 + 10.0;
+    CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
+    CGFloat minY = effHeight / 2.0 + 20.0; 
+    CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
+    
+    newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+    newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+    
+    self.window.center = newCenter;
+    [pan setTranslation:CGPointZero inView:self.window];
+
+    if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+        [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+}
+
+@end // <--- 就是这个@end，必须要有！
+
+static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] setVisibility:YES];
+}
+
+static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] setVisibility:NO];
+}
+
+static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [[FloaterManager sharedInstance] updateUI];
+}
+
+__attribute__((constructor)) static void initFloater() {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
