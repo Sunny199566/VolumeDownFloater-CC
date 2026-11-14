@@ -105,44 +105,41 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 绝对物理判定：开启硬件重力陀螺仪
         self.motionManager = [[CMMotionManager alloc] init];
         if (self.motionManager.isDeviceMotionAvailable) {
             [self.motionManager startDeviceMotionUpdates];
-            // 每 0.1 秒读取一次真实的重力坐标
             [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
         }
     });
 }
 
-// 绝对物理判定：无视旋转锁定，无视躺着还是坐着
+// 绝对物理判定：修正了躺着玩手机导致的重力紊乱
 - (void)checkMotion {
     if (self.window.hidden) return;
     
     CMDeviceMotion *motion = self.motionManager.deviceMotion;
     if (!motion) return;
     
-    // 获取真实的物理重力加速度 (范围 -1.0 到 1.0)
     double x = motion.gravity.x;
     double y = motion.gravity.y;
     
-    // 防抖处理：如果手机平放在桌面上，x和y的值都很小，就不做任何旋转
-    if (fabs(x) < 0.3 && fabs(y) < 0.3) return;
+    CGFloat targetAngle = self.currentAngle;
     
-    CGFloat targetAngle = 0;
-    
-    // 如果 X 轴的倾斜程度大于 Y 轴，说明手机物理上已经横过来了
-    if (fabs(x) > fabs(y)) {
+    // 核心逻辑：手机竖着拿（不管你是站着还是躺着），Y轴的绝对重力必定大于 0.6。
+    // 只要 Y 轴分量够大，死死锁住竖屏状态（0度）。
+    if (fabs(y) > 0.6) {
+        targetAngle = 0;
+    } 
+    // 只有当 Y 轴分量变小，且 X 轴分量变大（超过0.6），才说明手机物理上真正横过来了。
+    else if (fabs(x) > 0.6) {
         if (x > 0) {
-            targetAngle = -M_PI_2; // 向右横（Home键在左）
+            targetAngle = -M_PI_2; // 向右横
         } else {
-            targetAngle = M_PI_2;  // 向左横（Home键在右）
+            targetAngle = M_PI_2;  // 向左横
         }
-    } else {
-        targetAngle = 0; // 竖屏
     }
     
-    // 平滑过渡，只有当角度有明显变化时才执行动画
+    // 平滑动画
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
