@@ -39,8 +39,8 @@ void simulateVolumeDown(void) {
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel;       // 球体内部的文字
-@property (strong, nonatomic) UILabel *timeBottomLabel;  // 球体下方的时间
+@property (strong, nonatomic) UILabel *titleLabel;       
+@property (strong, nonatomic) UILabel *timeBottomLabel;  
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 @property (nonatomic, assign) CGFloat currentAngle;
@@ -138,10 +138,9 @@ void simulateVolumeDown(void) {
 // 从 CFPreferences 读取数据更新 UI
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 读取自定义图片 (Base64 解码)
-        CFStringRef base64Ref = CFPreferencesCopyAppValue(CFSTR("custom_bg"), CFSTR("com.yourname.volumedownfloater"));
-        if (base64Ref) {
-            NSString *base64String = (__bridge_transfer NSString *)base64Ref;
+        // 1. 读取自定义图片 (Base64 解码) - 修复了类型转换
+        NSString *base64String = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("custom_bg"), CFSTR("com.yourname.volumedownfloater"));
+        if (base64String) {
             NSData *imgData = [[NSData alloc] initWithBase64EncodedString:base64String options:0];
             if (imgData) {
                 self.bgImageView.image = [UIImage imageWithData:imgData];
@@ -168,8 +167,8 @@ void simulateVolumeDown(void) {
             self.titleLabel.hidden = NO;
             self.timeBottomLabel.hidden = YES;
             
-            CFStringRef titleRef = CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
-            NSString *title = titleRef ? (__bridge_transfer NSString *)titleRef : @"音量-";
+            // 修复了类型转换
+            NSString *title = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
             if (title.length == 0) title = @" ";
             self.titleLabel.text = title;
         }
