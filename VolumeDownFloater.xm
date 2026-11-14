@@ -38,6 +38,8 @@ void simulateVolumeDown(void) {
 
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UITextField *secureContainer; 
+@property (strong, nonatomic) UIView *mainContainer; // 新增：整体旋转容器
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;       
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
@@ -88,6 +90,19 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
+        // ====== 黑魔法：创建一个透明的、不可交互的密码框作为底层容器 ======
+        self.secureContainer = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
+        self.secureContainer.secureTextEntry = YES;
+        self.secureContainer.userInteractionEnabled = YES;
+        self.secureContainer.backgroundColor = [UIColor clearColor];
+        [self.window.rootViewController.view addSubview:self.secureContainer];
+
+        // ====== 新增：创建一个整体旋转的容器 ======
+        self.mainContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
+        self.mainContainer.backgroundColor = [UIColor clearColor];
+        [self.secureContainer addSubview:self.mainContainer];
+
+        // ====== 1. 创建球体 ======
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
@@ -102,7 +117,7 @@ void simulateVolumeDown(void) {
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
         
-        [self.window.rootViewController.view addSubview:self.floatBtn];
+        [self.mainContainer addSubview:self.floatBtn];
         
         self.bgImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.bgImageView.contentMode = UIViewContentModeScaleAspectFill;
@@ -118,7 +133,9 @@ void simulateVolumeDown(void) {
         self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
-        self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(-10, btnSize + 2, btnSize + 20, 20)];
+        // ====== 2. 创建球体下方的时间 ======
+        // 注意：这里的 x 和宽度对齐了 btnSize，保证整体旋转时中心点一致，不乱飘
+        self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, btnSize + 2, btnSize, 20)];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:12];
@@ -126,18 +143,25 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
-        [self.window.rootViewController.view addSubview:self.timeBottomLabel];
+        self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; // 防止时间过长被截断
+        [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
         [self updateUI];
         
-        [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkUIOrientation) userInfo:nil repeats:YES];
+        // 移除自动横屏功能，完全靠你长按
     });
 }
 
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 读取图片
+        // 1. 读取防截图开关
+        NSString *securePath = @"/var/mobile/Library/Preferences/volumefloater_secure.txt";
+        NSString *secureStr = [NSString stringWithContentsOfFile:securePath encoding:NSUTF8StringEncoding error:nil];
+        BOOL secureOn = [secureStr isEqualToString:@"1"];
+        self.secureContainer.secureTextEntry = secureOn; // 动态开启/关闭黑魔法
+
+        // 2. 读取图片
         NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
         if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
             self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
@@ -148,7 +172,7 @@ void simulateVolumeDown(void) {
             self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         }
         
-        // 2. 处理时间开关
+        // 3. 处理时间开关
         NSString *timePath = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
         NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
@@ -164,14 +188,14 @@ void simulateVolumeDown(void) {
             self.timeBottomLabel.hidden = YES;
         }
         
-        // 3. 读取内部文字（核心修改：不管开不开时间，文字始终显示）
+        // 4. 读取内部文字
         NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
         NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
         if (!title || title.length == 0) {
             title = @"音量-";
         }
         self.titleLabel.text = title;
-        self.titleLabel.hidden = NO; // 永远不隐藏文字
+        self.titleLabel.hidden = NO;
     });
 }
 
@@ -181,6 +205,7 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
+// 核心修复：长按旋转时，整体旋转 mainContainer
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
@@ -189,36 +214,12 @@ void simulateVolumeDown(void) {
         }
         
         [UIView animateWithDuration:0.3 animations:^{
-            self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-            self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
-            self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+            // 只转这个透明的大框架，里面的球和时间整体跟着转，绝不错位
+            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
         
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
-    }
-}
-
-- (void)checkUIOrientation {
-    if (self.window.hidden) return;
-    
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *activeScene = (UIWindowScene *)scene;
-            CGRect bounds = activeScene.coordinateSpace.bounds;
-            
-            if (bounds.size.width > bounds.size.height) {
-                if (fabs(self.currentAngle - (-M_PI_2)) > 0.1) {
-                    self.currentAngle = -M_PI_2;
-                    [UIView animateWithDuration:0.3 animations:^{
-                        self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-                        self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
-                        self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-                    }];
-                }
-                return;
-            }
-        }
     }
 }
 
@@ -235,6 +236,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
+// 拖动逻辑
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -246,10 +248,15 @@ void simulateVolumeDown(void) {
     CGFloat screenWidth = screenBounds.size.width;
     CGFloat screenHeight = screenBounds.size.height;
     
-    CGFloat minX = windowWidth / 2.0 + 10.0;
-    CGFloat maxX = screenWidth - windowWidth / 2.0 - 10.0;
-    CGFloat minY = windowHeight / 2.0 + 20.0; 
-    CGFloat maxY = screenHeight - windowHeight / 2.0 - 10.0;
+    // 如果转成横的了，宽和高互换一下作为边界判定
+    BOOL isRotated = fabs(self.currentAngle) > 1.0;
+    CGFloat effWidth = isRotated ? windowHeight : windowWidth;
+    CGFloat effHeight = isRotated ? windowWidth : windowHeight;
+    
+    CGFloat minX = effWidth / 2.0 + 10.0;
+    CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
+    CGFloat minY = effHeight / 2.0 + 20.0; 
+    CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
     
     newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
     newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
