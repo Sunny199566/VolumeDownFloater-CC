@@ -39,7 +39,7 @@ void simulateVolumeDown(void) {
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UITextField *secureContainer; 
-@property (strong, nonatomic) UIView *mainContainer; // 新增：整体旋转容器
+@property (strong, nonatomic) UIView *mainContainer; 
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;       
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
@@ -90,17 +90,19 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // ====== 黑魔法：创建一个透明的、不可交互的密码框作为底层容器 ======
+        // ====== 黑魔法：创建一个透明的密码框作为底层容器 ======
         self.secureContainer = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
         self.secureContainer.secureTextEntry = YES;
-        self.secureContainer.userInteractionEnabled = YES;
+        // 核心修复：必须有文本，系统才会渲染它的安全层！
+        self.secureContainer.text = @"HiddenForScreenshot"; 
+        self.secureContainer.userInteractionEnabled = NO; // 关闭自身交互，防止挡住点击
         self.secureContainer.backgroundColor = [UIColor clearColor];
         [self.window.rootViewController.view addSubview:self.secureContainer];
 
-        // ====== 新增：创建一个整体旋转的容器 ======
+        // ====== 整体旋转容器 ======
         self.mainContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        [self.secureContainer addSubview:self.mainContainer];
+        [self.window.rootViewController.view addSubview:self.mainContainer]; // 挂载到Window上，防止交互被吞
 
         // ====== 1. 创建球体 ======
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -134,7 +136,6 @@ void simulateVolumeDown(void) {
         [self.floatBtn addSubview:self.titleLabel];
         
         // ====== 2. 创建球体下方的时间 ======
-        // 注意：这里的 x 和宽度对齐了 btnSize，保证整体旋转时中心点一致，不乱飘
         self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, btnSize + 2, btnSize, 20)];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
@@ -143,13 +144,11 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
-        self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; // 防止时间过长被截断
+        self.timeBottomLabel.adjustsFontSizeToFitWidth = YES;
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
         [self updateUI];
-        
-        // 移除自动横屏功能，完全靠你长按
     });
 }
 
@@ -159,7 +158,7 @@ void simulateVolumeDown(void) {
         NSString *securePath = @"/var/mobile/Library/Preferences/volumefloater_secure.txt";
         NSString *secureStr = [NSString stringWithContentsOfFile:securePath encoding:NSUTF8StringEncoding error:nil];
         BOOL secureOn = [secureStr isEqualToString:@"1"];
-        self.secureContainer.secureTextEntry = secureOn; // 动态开启/关闭黑魔法
+        self.secureContainer.secureTextEntry = secureOn;
 
         // 2. 读取图片
         NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
@@ -205,7 +204,6 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-// 核心修复：长按旋转时，整体旋转 mainContainer
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
@@ -214,7 +212,6 @@ void simulateVolumeDown(void) {
         }
         
         [UIView animateWithDuration:0.3 animations:^{
-            // 只转这个透明的大框架，里面的球和时间整体跟着转，绝不错位
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
         
@@ -236,7 +233,6 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 拖动逻辑
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -248,7 +244,6 @@ void simulateVolumeDown(void) {
     CGFloat screenWidth = screenBounds.size.width;
     CGFloat screenHeight = screenBounds.size.height;
     
-    // 如果转成横的了，宽和高互换一下作为边界判定
     BOOL isRotated = fabs(self.currentAngle) > 1.0;
     CGFloat effWidth = isRotated ? windowHeight : windowWidth;
     CGFloat effHeight = isRotated ? windowWidth : windowHeight;
