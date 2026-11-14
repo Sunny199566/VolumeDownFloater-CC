@@ -3,7 +3,6 @@
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-// 已经彻底移除 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -55,7 +54,6 @@ void simulateVolumeDown(void) {
 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
-// 已经彻底移除 CHHapticEngine 属性
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -84,7 +82,7 @@ void simulateVolumeDown(void) {
         }
         if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
-        // 2000大窗口，完美跨越中间边界
+        // 2000x2000 的窗口，彻底跨越系统边界限制
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
@@ -93,7 +91,10 @@ void simulateVolumeDown(void) {
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        self.window.hidden = NO; 
+        // 读取全局状态文件，开机默认关闭
+        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+        NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
+        self.window.hidden = ![showStr isEqualToString:@"1"];
 
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
@@ -101,8 +102,6 @@ void simulateVolumeDown(void) {
         self.lastOrientationState = -1;
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-
-        // 已经彻底移除 CHHapticEngine 的初始化，完美解决发热和音量回弹
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -308,20 +307,16 @@ void simulateVolumeDown(void) {
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
-    // 核心修复：彻底移除 CHHapticEngine 逻辑，换回底层安全引擎
+    // 移除高级震动，换回底层安全引擎，解决发热和音量回弹
     if (@available(iOS 13.0, *)) {
         UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-        if (self.hapticIntensity < 0.3) {
-            style = UIImpactFeedbackStyleLight;
-        } else if (self.hapticIntensity > 0.7) {
-            style = UIImpactFeedbackStyleHeavy;
-        }
+        if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
+        else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
         
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
         [gen prepare];
         [gen impactOccurredWithIntensity:self.hapticIntensity];
         
-        // 保留 85% 以上的“双连击强震”逻辑
         if (self.hapticIntensity >= 0.85) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
@@ -333,7 +328,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 完美跟手版本：不加任何坐标系映射，直接听从系统的物理指令
+// 核心修复：直接使用系统给的 translation，不加任何人为映射
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -361,11 +356,11 @@ void simulateVolumeDown(void) {
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 在 2000x2000 的窗口里，屏幕可视区域的中心依然是 (1000, 1000)
+        // 2000x2000 的大窗口，中心点是 (1000, 1000)
         CGFloat centerX = 1000;
         CGFloat centerY = 1000;
         
-        // 核心边界限制
+        // 绝对边界限制，确保不管窗口多大，球永远卡在可视屏幕内
         CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
         CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
         CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
