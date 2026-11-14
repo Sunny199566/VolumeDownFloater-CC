@@ -38,7 +38,7 @@ void simulateVolumeDown(void) {
 
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
-@property (strong, nonatomic) UIView *mainContainer; // 整体旋转容器
+@property (strong, nonatomic) UIView *mainContainer; 
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;       
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
@@ -71,18 +71,13 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
-        CGFloat btnSize = 60.0;
-        CGFloat totalHeight = 85.0;
-        
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, btnSize, totalHeight)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 60, 85)]; }
         
-        self.window.frame = CGRectMake(20, 150, btnSize, totalHeight);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
-        
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
@@ -91,16 +86,12 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // 整体旋转容器
-        self.mainContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, btnSize, totalHeight)];
+        self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
-        // 球体
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
-        self.floatBtn.layer.cornerRadius = btnSize / 2.0;
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
@@ -113,22 +104,19 @@ void simulateVolumeDown(void) {
         
         [self.mainContainer addSubview:self.floatBtn];
         
-        self.bgImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
+        self.bgImageView = [[UIImageView alloc] init];
         self.bgImageView.contentMode = UIViewContentModeScaleAspectFill;
-        self.bgImageView.layer.cornerRadius = btnSize / 2.0;
         self.bgImageView.layer.masksToBounds = YES;
         self.bgImageView.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.bgImageView];
         
-        self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
+        self.titleLabel = [[UILabel alloc] init];
         self.titleLabel.textColor = [UIColor whiteColor];
         self.titleLabel.textAlignment = NSTextAlignmentCenter;
-        self.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
         self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
-        // 底部时间
-        self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, btnSize + 2, btnSize, 20)];
+        self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:12];
@@ -140,20 +128,55 @@ void simulateVolumeDown(void) {
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
+        
+        // 初始化位置（读取记忆）
+        NSString *pxStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" encoding:NSUTF8StringEncoding error:nil];
+        NSString *pyStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" encoding:NSUTF8StringEncoding error:nil];
+        CGFloat px = (pxStr && pxStr.length > 0) ? [pxStr floatValue] : 20;
+        CGFloat py = (pyStr && pyStr.length > 0) ? [pyStr floatValue] : 150;
+        self.window.center = CGPointMake(px, py);
+
         [self updateUI];
     });
 }
 
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 震动强度
-        NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
-        NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
-        if (hapticStr && hapticStr.length > 0) {
-            self.hapticIntensity = [hapticStr floatValue];
-        }
+        // 1. 读取各项配置
+        NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
+        if (hapticStr.length > 0) self.hapticIntensity = [hapticStr floatValue];
 
-        // 2. 图片
+        NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
+        CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
+
+        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
+        CGFloat alpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+
+        NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
+        if (colorStr.length == 0) colorStr = @"red";
+
+        // 2. 应用大小与透明度
+        self.mainContainer.frame = CGRectMake(0, 0, size, size + 25);
+        self.floatBtn.frame = CGRectMake(0, 0, size, size);
+        self.floatBtn.layer.cornerRadius = size / 2.0;
+        self.floatBtn.alpha = alpha;
+        
+        self.titleLabel.frame = self.floatBtn.bounds;
+        self.titleLabel.font = [UIFont systemFontOfSize:size * 0.25 weight:UIFontWeightMedium];
+        
+        self.bgImageView.frame = self.floatBtn.bounds;
+        self.bgImageView.layer.cornerRadius = size / 2.0;
+        
+        self.timeBottomLabel.frame = CGRectMake(0, size + 2, size, 20);
+
+        // 3. 应用颜色
+        UIColor *bgColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
+        if ([colorStr isEqualToString:@"blue"]) bgColor = [UIColor systemBlueColor];
+        else if ([colorStr isEqualToString:@"green"]) bgColor = [UIColor systemGreenColor];
+        else if ([colorStr isEqualToString:@"black"]) bgColor = [UIColor blackColor];
+        else if ([colorStr isEqualToString:@"clear"]) bgColor = [UIColor clearColor];
+
+        // 4. 应用图片
         NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
         if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
             self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
@@ -161,17 +184,14 @@ void simulateVolumeDown(void) {
             self.floatBtn.backgroundColor = [UIColor clearColor];
         } else {
             self.bgImageView.hidden = YES;
-            self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
+            self.floatBtn.backgroundColor = bgColor;
         }
         
-        // 3. 时间
-        NSString *timePath = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
-        NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
+        // 5. 时间
+        NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
-        
         [self.timeTimer invalidate];
         self.timeTimer = nil;
-        
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
@@ -180,12 +200,9 @@ void simulateVolumeDown(void) {
             self.timeBottomLabel.hidden = YES;
         }
         
-        // 4. 文字
-        NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
-        NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
-        if (!title || title.length == 0) {
-            title = @"音量-";
-        }
+        // 6. 文字
+        NSString *title = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" encoding:NSUTF8StringEncoding error:nil];
+        if (!title || title.length == 0) title = @"音量-";
         self.titleLabel.text = title;
         self.titleLabel.hidden = NO;
     });
@@ -197,18 +214,13 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-// 长按旋转（整体旋转，绝不错位）
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
-        if (self.currentAngle >= M_PI * 2) {
-            self.currentAngle = 0;
-        }
-        
+        if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
-        
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
     }
@@ -220,10 +232,8 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 单击触发自定义强度震动
 - (void)btnTapped {
     if (self.window.hidden) return;
-    
     if (@available(iOS 13.0, *)) {
         [self.hapticGenerator impactOccurredWithIntensity:self.hapticIntensity];
     } else {
@@ -233,6 +243,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
+// 拖动逻辑（带磁吸和记忆）
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self.window];
     CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -258,6 +269,21 @@ void simulateVolumeDown(void) {
     
     self.window.center = newCenter;
     [pan setTranslation:CGPointZero inView:self.window];
+
+    // 核心新增：松手时磁吸边缘并保存坐标
+    if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
+        CGFloat targetX = (self.window.center.x < screenWidth / 2.0) ? minX : maxX;
+        
+        [UIView animateWithDuration:0.3 animations:^{
+            self.window.center = CGPointMake(targetX, self.window.center.y);
+        } completion:^(BOOL finished) {
+            // 记忆位置
+            NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+            NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+            [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }];
+    }
 }
 @end
 
