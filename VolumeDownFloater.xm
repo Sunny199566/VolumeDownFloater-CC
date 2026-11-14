@@ -51,7 +51,6 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
-// 记录上一次的真实界面方向
 @property (nonatomic, assign) NSInteger lastOrientationState;
 
 @property (strong, nonatomic) NSTimer *timeTimer;
@@ -94,9 +93,8 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
-        self.lastOrientationState = -1; // 初始未知状态
+        self.lastOrientationState = -1;
 
-        // 开启电池监控
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
 
         if (@available(iOS 13.0, *)) {
@@ -144,7 +142,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:10]; // 字体稍微改小一点，适应时间+电量
+        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:10];
         self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
@@ -173,7 +171,6 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 终极底层状态探测
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
@@ -217,7 +214,6 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 长按：手动强制旋转 90 度
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -307,19 +303,15 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 核心修改：显示 时间 + 电量百分比
 - (void)updateTimeText {
-    // 1. 获取当前时间 (去掉秒)
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     [formatter setDateFormat:@"HH:mm"];
     NSString *timeStr = [formatter stringFromDate:[NSDate date]];
     
-    // 2. 获取当前电量
     float batteryLevel = [[UIDevice currentDevice] batteryLevel];
     int batteryPercent = (int)(batteryLevel * 100);
-    if (batteryPercent < 0) batteryPercent = 0; // 极少数情况读到负数
+    if (batteryPercent < 0) batteryPercent = 0;
     
-    // 3. 组合显示
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ | %d%%", timeStr, batteryPercent];
 }
 
@@ -363,29 +355,33 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
+// 核心修复：精确边界计算，防止右边飞出去
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
-        
         CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
+        // 获取真实的物理屏幕尺寸
         CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenWidth = MAX(screenBounds.size.width, screenBounds.size.height);
-        CGFloat screenHeight = MAX(screenBounds.size.width, screenBounds.size.height);
+        CGFloat physicalMaxDim = MAX(screenBounds.size.width, screenBounds.size.height);
+        CGFloat physicalMinDim = MIN(screenBounds.size.width, screenBounds.size.height);
         
-        CGFloat winW = self.window.bounds.size.width;
-        CGFloat winH = self.window.bounds.size.height;
-        CGFloat ballW = isRotated ? winH : winW;
-        CGFloat ballH = isRotated ? winW : winH;
+        // 如果球是横屏，绝对宽度就是长边；如果球是竖屏，绝对宽度就是短边
+        CGFloat absoluteWidth = isRotated ? physicalMaxDim : physicalMinDim;
+        CGFloat absoluteHeight = isRotated ? physicalMinDim : physicalMaxDim;
         
-        CGFloat minX = ballW / 2.0 + 10.0;
-        CGFloat maxX = screenWidth - ballW / 2.0 - 10.0;
-        CGFloat minY = ballH / 2.0 + 20.0; 
-        CGFloat maxY = screenHeight - ballH / 2.0 - 10.0;
+        // 获取窗口的长宽（考虑旋转的影响）
+        CGFloat ballWidth = isRotated ? self.window.bounds.size.height : self.window.bounds.size.width;
+        CGFloat ballHeight = isRotated ? self.window.bounds.size.width : self.window.bounds.size.height;
+        
+        CGFloat minX = ballWidth / 2.0 + 10.0;
+        CGFloat maxX = absoluteWidth - ballWidth / 2.0 - 10.0;
+        CGFloat minY = ballHeight / 2.0 + 20.0; 
+        CGFloat maxY = absoluteHeight - ballHeight / 2.0 - 10.0;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
         newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
