@@ -135,25 +135,23 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 从 CFPreferences 读取数据更新 UI
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 读取自定义图片 (Base64 解码) - 修复了类型转换
-        NSString *base64String = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("custom_bg"), CFSTR("com.yourname.volumedownfloater"));
-        if (base64String) {
-            NSData *imgData = [[NSData alloc] initWithBase64EncodedString:base64String options:0];
-            if (imgData) {
-                self.bgImageView.image = [UIImage imageWithData:imgData];
-                self.bgImageView.hidden = NO;
-                self.floatBtn.backgroundColor = [UIColor clearColor];
-            }
+        // 1. 读取图片
+        NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
+        if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
+            self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
+            self.bgImageView.hidden = NO;
+            self.floatBtn.backgroundColor = [UIColor clearColor];
         } else {
             self.bgImageView.hidden = YES;
             self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         }
         
         // 2. 读取时间开关
-        Boolean showTime = CFPreferencesGetAppBooleanValue(CFSTR("showtime"), CFSTR("com.yourname.volumedownfloater"), NULL);
+        NSString *timePath = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
+        NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
+        BOOL showTime = [timeStatus isEqualToString:@"1"];
         
         [self.timeTimer invalidate];
         self.timeTimer = nil;
@@ -167,9 +165,11 @@ void simulateVolumeDown(void) {
             self.titleLabel.hidden = NO;
             self.timeBottomLabel.hidden = YES;
             
-            // 修复了类型转换
-            NSString *title = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
-            if (title.length == 0) title = @" ";
+            NSString *titlePath = @"/var/mobile/Library/Preferences/volumefloater_title.txt";
+            NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
+            if (!title || title.length == 0) {
+                title = @"音量-";
+            }
             self.titleLabel.text = title;
         }
     });
