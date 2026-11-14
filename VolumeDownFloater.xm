@@ -3,6 +3,7 @@
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -51,9 +52,11 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
 @property (nonatomic, assign) NSInteger lastOrientationState;
+@property (nonatomic, assign) CGPoint lastTouchPoint; // 记录绝对坐标
 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -90,10 +93,14 @@ void simulateVolumeDown(void) {
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        // 核心修复：开机强制读取状态，默认关闭
+        // 读取全局状态文件：如果以前是关闭的，这次重启也保持关闭！
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
-        self.window.hidden = ![showStr isEqualToString:@"1"];
+        if ([showStr isEqualToString:@"1"]) {
+            self.window.hidden = NO;
+        } else {
+            self.window.hidden = YES;
+        }
 
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
@@ -327,15 +334,38 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
+// 核心修复：坐标差值法 + 移动整个 Window
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
+        // 记录按下时的绝对物理坐标
+        self.lastTouchPoint = [pan locationInView:self.window];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [pan translationInView:self.window];
+        // 获取当前的绝对物理坐标
+        CGPoint currentPoint = [pan locationInView:self.window];
         
-        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
+        // 计算物理差值
+        CGPoint delta = CGPointMake(currentPoint.x - self.lastTouchPoint.x, currentPoint.y - self.lastTouchPoint.y);
+        self.lastTouchPoint = currentPoint;
         
+        // 核心逻辑：根据横竖屏，把手指的物理滑动量映射到整个 Window 的中心点
+        CGPoint realTranslation = delta;
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
+        
+        if (isRotated) {
+            if (self.currentAngle > 0) {
+                // 顺时针 90 度
+                realTranslation.x = delta.y;
+                realTranslation.y = -delta.x;
+            } else {
+                // 逆时针 90 度
+                realTranslation.x = -delta.y;
+                realTranslation.y = delta.x;
+            }
+        }
+        
+        // 移动 Window 本身，彻底跨过中间的那堵墙
+        CGPoint newWindowCenter = CGPointMake(self.window.center.x + realTranslation.x, self.window.center.y + realTranslation.y);
         
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         CGFloat screenW = screenBounds.size.width;
@@ -350,22 +380,26 @@ void simulateVolumeDown(void) {
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        CGFloat centerX = 1000;
-        CGFloat centerY = 1000;
+        // 限制 Window 的中心点，确保球死死卡在可视边缘
+        CGFloat realMinX = ballW / 2.0 + 10.0;
+        CGFloat realMaxX = screenW - ballW / 2.0 - 10.0;
+        CGFloat realMinY = ballH / 2.0 + 20.0;
+        CGFloat realMaxY = screenH - ballH / 2.0 - 10.0;
         
-        CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
-        CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
-        CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
-        CGFloat maxY = centerY + visualH / 2.0 - ballH / 2.0 - 10.0;
+        if (isRotated) {
+            realMinX = ballW / 2.0 + 10.0;
+            realMaxX = screenH - ballW / 2.0 - 10.0; 
+            realMinY = ballH / 2.0 + 20.0;
+            realMaxY = screenW - ballH / 2.0 - 10.0; 
+        }
         
-        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+        newWindowCenter.x = MAX(realMinX, MIN(newWindowCenter.x, realMaxX));
+        newWindowCenter.y = MAX(realMinY, MIN(newWindowCenter.y, realMaxY));
         
-        self.mainContainer.center = newCenter;
-        [pan setTranslation:CGPointZero inView:self.window];
+        self.window.center = newWindowCenter;
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.y];
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
