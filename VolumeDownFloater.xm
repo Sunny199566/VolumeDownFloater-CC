@@ -3,7 +3,6 @@
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -55,7 +54,6 @@ void simulateVolumeDown(void) {
 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
-@property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -92,14 +90,10 @@ void simulateVolumeDown(void) {
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        // 读取全局状态文件：如果以前是关闭的，这次重启也保持关闭！
+        // 核心修复：开机强制读取状态，默认关闭
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
-        if ([showStr isEqualToString:@"1"]) {
-            self.window.hidden = NO;
-        } else {
-            self.window.hidden = YES;
-        }
+        self.window.hidden = ![showStr isEqualToString:@"1"];
 
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
@@ -107,14 +101,6 @@ void simulateVolumeDown(void) {
         self.lastOrientationState = -1;
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-
-        if (@available(iOS 13.0, *)) {
-            if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
-                NSError *error = nil;
-                self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
-                [self.hapticEngine startAndReturnError:&error];
-            }
-        }
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -317,34 +303,24 @@ void simulateVolumeDown(void) {
     });
 }
 
+// 彻底移除高级触觉引擎，防止抢占音频通道导致音量回弹发热
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
     if (@available(iOS 13.0, *)) {
-        if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
-            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticIntensity];
-            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
-            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.hapticDuration / 1000.0)];
-            NSError *error = nil;
-            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-            if (!error) {
-                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) [player startAtTime:0 error:&error];
-            }
-        } else {
-            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-            if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
-            else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-            [gen prepare];
-            [gen impactOccurredWithIntensity:self.hapticIntensity];
-            
-            if (self.hapticIntensity >= 0.85) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-                    [gen2 impactOccurred];
-                });
-            }
+        UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+        if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
+        else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
+        
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+        [gen prepare];
+        [gen impactOccurredWithIntensity:self.hapticIntensity];
+        
+        if (self.hapticIntensity >= 0.85) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+                [gen2 impactOccurred];
+            });
         }
     }
     
@@ -398,12 +374,10 @@ void simulateVolumeDown(void) {
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
-    [[NSString stringWithFormat:@"1"] writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:NO];
-    [[NSString stringWithFormat:@"0"] writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
