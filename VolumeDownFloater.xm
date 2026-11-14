@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -41,6 +42,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (strong, nonatomic) CMMotionManager *motionManager;
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -103,38 +105,45 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 开启设备方向监听（不受锁定影响）
-        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(deviceOrientationDidChange) name:UIDeviceOrientationDidChangeNotification object:nil];
+        // 绝对物理判定：开启硬件重力陀螺仪
+        self.motionManager = [[CMMotionManager alloc] init];
+        if (self.motionManager.isDeviceMotionAvailable) {
+            [self.motionManager startDeviceMotionUpdates];
+            // 每 0.1 秒读取一次真实的重力坐标
+            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
+        }
     });
 }
 
-// 1. 收到方向变化信号时，先取消之前的旋转任务，然后延迟 0.3 秒
-- (void)deviceOrientationDidChange {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyRotation) object:nil];
-    [self performSelector:@selector(applyRotation) withObject:nil afterDelay:0.3];
-}
-
-// 2. 0.3 秒后，如果手机依然保持那个方向，才真正执行旋转
-- (void)applyRotation {
+// 绝对物理判定：无视旋转锁定，无视躺着还是坐着
+- (void)checkMotion {
     if (self.window.hidden) return;
     
-    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
-    CGFloat targetAngle = self.currentAngle;
+    CMDeviceMotion *motion = self.motionManager.deviceMotion;
+    if (!motion) return;
     
-    if (orientation == UIDeviceOrientationLandscapeLeft) {
-        targetAngle = M_PI_2; // 向左横
-    } else if (orientation == UIDeviceOrientationLandscapeRight) {
-        targetAngle = -M_PI_2; // 向右横
-    } else if (orientation == UIDeviceOrientationPortrait) {
-        targetAngle = 0; // 竖屏
-    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
-        targetAngle = 0; // 倒置不转
+    // 获取真实的物理重力加速度 (范围 -1.0 到 1.0)
+    double x = motion.gravity.x;
+    double y = motion.gravity.y;
+    
+    // 防抖处理：如果手机平放在桌面上，x和y的值都很小，就不做任何旋转
+    if (fabs(x) < 0.3 && fabs(y) < 0.3) return;
+    
+    CGFloat targetAngle = 0;
+    
+    // 如果 X 轴的倾斜程度大于 Y 轴，说明手机物理上已经横过来了
+    if (fabs(x) > fabs(y)) {
+        if (x > 0) {
+            targetAngle = -M_PI_2; // 向右横（Home键在左）
+        } else {
+            targetAngle = M_PI_2;  // 向左横（Home键在右）
+        }
     } else {
-        return; // 平放桌面，保持不动
+        targetAngle = 0; // 竖屏
     }
     
-    if (targetAngle != self.currentAngle) {
+    // 平滑过渡，只有当角度有明显变化时才执行动画
+    if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
@@ -156,9 +165,6 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self applyRotation]; // 重新出现时立刻同步一次方向
-        }
     });
 }
 
