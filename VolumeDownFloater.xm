@@ -169,7 +169,8 @@ void simulateVolumeDown(void) {
 
 - (void)btnTapped {
     if (self.window.hidden) return;
-    [self.hapticFeedbackGenerator impactOccurred];
+    // 修复了这里的拼写错误
+    [self.hapticGenerator impactOccurred];
     [self.hapticGenerator prepare]; 
     simulateVolumeDown();
 }
