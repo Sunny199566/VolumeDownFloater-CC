@@ -1,8 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <objc/runtime.h>
-#import <objc/message.h>
 #import <CoreHaptics/CoreHaptics.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -160,41 +158,26 @@ void simulateVolumeDown(void) {
                 py = savedY;
             }
         }
-        // 修复了这里的语法错误
         self.window.center = CGPointMake(px, py);
 
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkSystemOrientation) userInfo:nil repeats:YES];
+        // 启动底层物理屏幕比例监听
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkPhysicalOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
 
-- (void)checkSystemOrientation {
+// 终极破防：直接读取硬件物理分辨率，无视一切强制横屏/重力/侧躺
+- (void)checkPhysicalOrientation {
     if (self.window.hidden || self.isHiddenState) return;
     
-    long long sysOrientation = 1; 
+    // 获取底层物理屏幕的真实尺寸
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
     
-    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
-    if (FBSClass) {
-        id observer = [[FBSClass alloc] init];
-        SEL sel = NSSelectorFromString(@"activeOrientation");
-        if ([observer respondsToSelector:sel]) {
-            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
-        }
-    } else {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *activeScene = (UIWindowScene *)scene;
-                CGRect bounds = activeScene.coordinateSpace.bounds;
-                if (bounds.size.width > bounds.size.height) sysOrientation = 3;
-            }
-        }
-    }
-
     CGFloat targetAngle = 0;
-    if (sysOrientation == 3) {
-        targetAngle = M_PI_2;
-    } else if (sysOrientation == 4) {
-        targetAngle = -M_PI_2;
+    
+    // 只要宽度大于高度，说明游戏强制横屏了，直接转！
+    if (screenSize.width > screenSize.height) {
+        targetAngle = -M_PI_2; // 永远转为正向横屏
     } else {
         targetAngle = 0;
     }
@@ -207,6 +190,7 @@ void simulateVolumeDown(void) {
     }
 }
 
+// 长按：临时隐藏/恢复
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
