@@ -16,7 +16,7 @@
     self.window.rootViewController = vc;
     self.window.hidden = NO;
 
-    // --- 标题 ---
+    // 标题
     UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, self.window.bounds.size.width, 40)];
     headerLabel.text = @"音量悬浮球控制台";
     headerLabel.font = [UIFont boldSystemFontOfSize:24];
@@ -30,8 +30,7 @@
     [vc.view addSubview:switchLabel];
 
     self.toggleSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 160, 51, 31)];
-    BOOL isOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"toggleState"];
-    self.toggleSwitch.on = isOn;
+    self.toggleSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"toggleState"];
     [self.toggleSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [vc.view addSubview:self.toggleSwitch];
 
@@ -57,9 +56,11 @@
     self.titleTextField.placeholder = @"输入你想显示的文字";
     self.titleTextField.textAlignment = NSTextAlignmentCenter;
     
-    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
-    NSString *currentTitle = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    self.titleTextField.text = (currentTitle && currentTitle.length > 0) ? currentTitle : @"音量-";
+    // 从全局配置读取文字
+    CFStringRef titleRef = CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
+    NSString *currentTitle = titleRef ? (__bridge_transfer NSString *)titleRef : @"音量-";
+    self.titleTextField.text = currentTitle;
+    
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
     [vc.view addSubview:self.titleTextField];
 
@@ -77,7 +78,7 @@
     // --- 清除图片按钮 ---
     UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     clearBtn.frame = CGRectMake(40, 450, self.window.bounds.size.width - 80, 45);
-    [clearBtn setTitle:@"清除自定义图标 (恢复纯色)" forState:UIControlStateNormal];
+    [clearBtn setTitle:@"清除自定义图标" forState:UIControlStateNormal];
     clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     clearBtn.backgroundColor = [UIColor systemRedColor];
     [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -85,8 +86,7 @@
     [clearBtn addTarget:self action:@selector(clearImage) forControlEvents:UIControlEventTouchUpInside];
     [vc.view addSubview:clearBtn];
 
-    // App 启动时，强制同步一次状态给 Tweak
-    [self syncState:isOn];
+    [self syncState:self.toggleSwitch.isOn];
     return YES;
 }
 
@@ -103,8 +103,9 @@
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"timeState"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_showtime.txt";
-    [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // 存入 CFPreferences
+    CFPreferencesSetAppValue(CFSTR("showtime"), sender.isOn ? kCFBooleanTrue : kCFBooleanFalse, CFSTR("com.yourname.volumedownfloater"));
+    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
     
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
     
@@ -116,8 +117,9 @@
     NSString *newText = sender.text;
     if (newText.length == 0) newText = @" ";
     
-    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
-    [newText writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // 存入 CFPreferences
+    CFPreferencesSetAppValue(CFSTR("title"), (__bridge CFStringRef)newText, CFSTR("com.yourname.volumedownfloater"));
+    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
     
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
@@ -134,17 +136,20 @@
     
     UIImage *image = info[UIImagePickerControllerOriginalImage];
     if (image) {
-        NSData *imgData = UIImagePNGRepresentation(image);
-        NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_bg.png";
-        [imgData writeToFile:path atomically:YES];
+        // 压缩图片并转为 Base64 字符串存入 CFPreferences
+        NSData *imgData = UIImageJPEGRepresentation(image, 0.8);
+        NSString *base64String = [imgData base64EncodedStringWithOptions:0];
+        
+        CFPreferencesSetAppValue(CFSTR("custom_bg"), (__bridge CFStringRef)base64String, CFSTR("com.yourname.volumedownfloater"));
+        CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
         
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
     }
 }
 
 - (void)clearImage {
-    NSString *path = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_bg.png";
-    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    CFPreferencesSetAppValue(CFSTR("custom_bg"), NULL, CFSTR("com.yourname.volumedownfloater"));
+    CFPreferencesAppSynchronize(CFSTR("com.yourname.volumedownfloater"));
     
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
