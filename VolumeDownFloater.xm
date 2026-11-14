@@ -79,13 +79,12 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
-        // 采用 1000x1000 的超大安全窗口，绝对不会崩，且能突破横屏坐标限制
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 1000, 1000)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
-        self.window.frame = CGRectMake(0, 0, 1000, 1000);
+        self.window.frame = CGRectMake(0, 0, 2000, 2000);
         self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
         
         self.window.windowLevel = UIWindowLevelAlert + 2000;
@@ -93,7 +92,14 @@ void simulateVolumeDown(void) {
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        self.window.hidden = NO; 
+        // 读取全局状态文件：如果以前是关闭的，这次重启也保持关闭！
+        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+        NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
+        if ([showStr isEqualToString:@"1"]) {
+            self.window.hidden = NO;
+        } else {
+            self.window.hidden = YES;
+        }
 
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
@@ -112,8 +118,7 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        // 永远放在 1000x1000 的正中心
-        self.mainContainer.center = CGPointMake(500, 500);
+        self.mainContainer.center = CGPointMake(1000, 1000);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -346,49 +351,45 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 核心修复：回归最原始的平移逻辑，系统给多少位移，就移多少，绝对跟手！
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
         
-        // 直接让窗口加上物理位移
-        CGPoint newWindowCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
-        // 边界限制（用于防止飞出屏幕）
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         CGFloat screenW = screenBounds.size.width;
         CGFloat screenH = screenBounds.size.height;
         
+        CGFloat maxW = MAX(screenW, screenH);
+        CGFloat minW = MIN(screenW, screenH);
+        
+        CGFloat visualW = isRotated ? maxW : minW;
+        CGFloat visualH = isRotated ? minW : maxW;
+        
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        CGFloat realMinX, realMaxX, realMinY, realMaxY;
+        CGFloat centerX = 1000;
+        CGFloat centerY = 1000;
         
-        if (isRotated) {
-            realMinX = ballW / 2.0 + 10.0;
-            realMaxX = screenH - ballW / 2.0 - 10.0;
-            realMinY = ballH / 2.0 + 20.0;
-            realMaxY = screenW - ballH / 2.0 - 10.0;
-        } else {
-            realMinX = ballW / 2.0 + 10.0;
-            realMaxX = screenW - ballW / 2.0 - 10.0;
-            realMinY = ballH / 2.0 + 20.0;
-            realMaxY = screenH - ballH / 2.0 - 10.0;
-        }
+        CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
+        CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
+        CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
+        CGFloat maxY = centerY + visualH / 2.0 - ballH / 2.0 - 10.0;
         
-        newWindowCenter.x = MAX(realMinX, MIN(newWindowCenter.x, realMaxX));
-        newWindowCenter.y = MAX(realMinY, MIN(newWindowCenter.y, realMaxY));
+        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
         
-        self.window.center = newWindowCenter;
-        
+        self.mainContainer.center = newCenter;
         [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
@@ -397,10 +398,12 @@ void simulateVolumeDown(void) {
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
+    [[NSString stringWithFormat:@"1"] writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:NO];
+    [[NSString stringWithFormat:@"0"] writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
