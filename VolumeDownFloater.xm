@@ -200,7 +200,7 @@ void simulateVolumeDown(void) {
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
-        // 修复：区分横屏左和横屏右，否则有一个方向文字会倒过来
+        // 修复：区分横屏左和横屏右
         CGFloat targetAngle = 0;
         if (sysOrientation == 3) targetAngle = -M_PI_2; // 横屏向右
         else if (sysOrientation == 4) targetAngle = M_PI_2; // 横屏向左
@@ -214,7 +214,7 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 核心修复：边界限制不要用 MAX/MIN 乱换，直接使用物理宽度
+// 边界限制使用物理宽度，防止左右拖不动
 - (void)clampCurrentPosition {
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
     
@@ -364,7 +364,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 核心修复：取消所有多余的视觉映射，直接用物理 delta 并在完全正确的物理边界内限制
+// 取消所有多余的视觉映射，直接用物理 delta 并在完全正确的物理边界内限制
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -379,7 +379,7 @@ void simulateVolumeDown(void) {
         
         BOOL isRotated = fabs(self.currentAngle) > 0.1;
         
-        // 强行使用物理屏幕尺寸（iOS 的 UIScreen bounds 无论横竖，宽高永远是竖屏的值，比如 390x844）
+        // 强行使用物理屏幕尺寸（UIScreen 的 bounds 无论横竖，宽高永远是竖屏的值）
         CGSize screenSize = [UIScreen mainScreen].bounds.size;
         
         // 球旋转后的视觉大小
@@ -388,7 +388,7 @@ void simulateVolumeDown(void) {
         
         CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
         
-        // 计算真实的、不会出界的边界（不要使用 MAX/MIN 互换，直接用 screenSize）
+        // 计算真实的、不会出界的边界
         CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
         CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
         CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
@@ -407,7 +407,11 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// 这里利用 Logos 语法的构造函数（替换你原来的 constructor）
+// --- 修复编译报错：先声明回调函数 ---
+static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
+static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
+static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
+
 __attribute__((constructor)) static void initFloater() {
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
@@ -415,6 +419,7 @@ __attribute__((constructor)) static void initFloater() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
 
+// --- 回调函数的具体实现 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
