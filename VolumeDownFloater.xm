@@ -92,7 +92,6 @@ void simulateVolumeDown(void) {
         self.isCustomHaptic = NO;
         self.isHiddenState = NO;
 
-        // 开启设备物理方向通知
         [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
 
         if (@available(iOS 13.0, *)) {
@@ -163,7 +162,6 @@ void simulateVolumeDown(void) {
         }
         self.window.center = CGPointMake(px, py);
 
-        // 启动底层物理屏幕比例监听
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkPhysicalOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
@@ -177,20 +175,16 @@ void simulateVolumeDown(void) {
     CGFloat targetAngle = 0;
     
     if (screenSize.width > screenSize.height) {
-        // 第一道关卡：宽大于高，说明绝对在横屏状态（游戏、全屏视频）
-        // 此时再读取重力方向，区分左横还是右横
         UIDeviceOrientation deviceOri = [[UIDevice currentDevice] orientation];
         
         if (deviceOri == UIDeviceOrientationLandscapeLeft) {
-            targetAngle = M_PI_2; // 刚刚验证过正向的顺时针 90度
+            targetAngle = M_PI_2; 
         } else if (deviceOri == UIDeviceOrientationLandscapeRight) {
-            targetAngle = -M_PI_2; // 倒过来（逆时针 90度）
+            targetAngle = -M_PI_2; 
         } else {
-            // 如果此时手机是平放（FaceUp/FaceDown），保持当前角度不变，防止乱跳
             return; 
         }
     } else {
-        // 第二道关卡：宽小于高，说明是竖屏。无视一切重力，死死锁住 0 度。
         targetAngle = 0;
     }
 
@@ -202,7 +196,6 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 长按：临时隐藏/恢复
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -357,11 +350,13 @@ void simulateVolumeDown(void) {
         CGFloat windowWidth = self.window.bounds.size.width;
         CGFloat windowHeight = self.window.bounds.size.height;
         
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenWidth = screenBounds.size.width;
-        CGFloat screenHeight = screenBounds.size.height;
-        
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
+        
+        // 核心修复：当横屏时，强行把物理屏幕的宽和高对调，打破竖屏坐标系的“隐形墙”
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        CGFloat screenWidth = isRotated ? MAX(screenBounds.size.width, screenBounds.size.height) : MIN(screenBounds.size.width, screenBounds.size.height);
+        CGFloat screenHeight = isRotated ? MIN(screenBounds.size.width, screenBounds.size.height) : MAX(screenBounds.size.width, screenBounds.size.height);
+        
         CGFloat effWidth = isRotated ? windowHeight : windowWidth;
         CGFloat effHeight = isRotated ? windowWidth : windowHeight;
         
