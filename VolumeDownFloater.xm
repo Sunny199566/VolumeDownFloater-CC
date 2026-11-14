@@ -345,25 +345,42 @@ void simulateVolumeDown(void) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
-        CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
         
-        CGFloat windowWidth = self.window.bounds.size.width;
-        CGFloat windowHeight = self.window.bounds.size.height;
-        
+        CGPoint newCenter = self.window.center;
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
-        
-        // 核心修复：当横屏时，强行把物理屏幕的宽和高对调，打破竖屏坐标系的“隐形墙”
+
+        // ==========================================
+        // 核心修复：坐标系硬核反转！
+        // 打破“隐形墙”，让手指横着划也能走遍全屏
+        // ==========================================
+        if (isRotated) {
+            if (self.currentAngle > 0) { 
+                // 顺时针 90 度 (横屏)
+                newCenter.x += translation.y; 
+                newCenter.y -= translation.x; 
+            } else { 
+                // 逆时针 90 度 (倒立横屏)
+                newCenter.x -= translation.y;
+                newCenter.y += translation.x;
+            }
+        } else {
+            // 正常竖屏
+            newCenter.x += translation.x;
+            newCenter.y += translation.y;
+        }
+
+        // 物理屏幕尺寸
         CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenWidth = isRotated ? MAX(screenBounds.size.width, screenBounds.size.height) : MIN(screenBounds.size.width, screenBounds.size.height);
-        CGFloat screenHeight = isRotated ? MIN(screenBounds.size.width, screenBounds.size.height) : MAX(screenBounds.size.width, screenBounds.size.height);
+        CGFloat screenWidth = MIN(screenBounds.size.width, screenBounds.size.height);
+        CGFloat screenHeight = MAX(screenBounds.size.width, screenBounds.size.height);
         
-        CGFloat effWidth = isRotated ? windowHeight : windowWidth;
-        CGFloat effHeight = isRotated ? windowWidth : windowHeight;
+        // 无论球转没转，都用最大的宽高作为安全边界，防止拖出物理屏幕外
+        CGFloat winW = MAX(self.window.bounds.size.width, self.window.bounds.size.height);
         
-        CGFloat minX = effWidth / 2.0 + 10.0;
-        CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
-        CGFloat minY = effHeight / 2.0 + 20.0; 
-        CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
+        CGFloat minX = winW / 2.0 + 10.0;
+        CGFloat maxX = screenWidth - winW / 2.0 - 10.0;
+        CGFloat minY = winW / 2.0 + 20.0; 
+        CGFloat maxY = screenHeight - winW / 2.0 - 10.0;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
         newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
