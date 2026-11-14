@@ -1,11 +1,9 @@
 #import <UIKit/UIKit.h>
-#import <CoreHaptics/CoreHaptics.h>
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UISwitch *toggleSwitch;
 @property (strong, nonatomic) UISwitch *timeSwitch;
-@property (strong, nonatomic) UISwitch *customHapticSwitch;
 @property (strong, nonatomic) UITextField *titleTextField;
 @property (strong, nonatomic) UISlider *hapticSlider;
 @property (strong, nonatomic) UISlider *durationSlider;
@@ -26,7 +24,7 @@
     self.window.hidden = NO;
 
     UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.window.bounds];
-    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 900); // 增加高度
+    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 900);
     [vc.view addSubview:scrollView];
 
     UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 40, self.window.bounds.size.width, 40)];
@@ -41,7 +39,11 @@
     switchLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:switchLabel];
     self.toggleSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 110, 51, 31)];
-    self.toggleSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"toggleState"];
+    
+    NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+    NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
+    self.toggleSwitch.on = [showStr isEqualToString:@"1"];
+    
     [self.toggleSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.toggleSwitch];
 
@@ -70,22 +72,12 @@
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
     [scrollView addSubview:self.titleTextField];
 
-    // 4. 自定义振动模式开关
-    UILabel *customHapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 310, 200, 30)];
-    customHapticLabel.text = @"自定义振动模式";
-    customHapticLabel.font = [UIFont systemFontOfSize:18];
-    [scrollView addSubview:customHapticLabel];
-    self.customHapticSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(self.window.bounds.size.width - 90, 310, 51, 31)];
-    self.customHapticSwitch.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"customHapticState"];
-    [self.customHapticSwitch addTarget:self action:@selector(customHapticChanged:) forControlEvents:UIControlEventValueChanged];
-    [scrollView addSubview:self.customHapticSwitch];
-
-    // 5. 震动强度
-    UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 360, 200, 30)];
+    // 4. 震动强度
+    UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 310, 200, 30)];
     hapticLabel.text = @"振动强度调节";
     hapticLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:hapticLabel];
-    self.hapticSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 400, self.window.bounds.size.width - 80, 30)];
+    self.hapticSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 350, self.window.bounds.size.width - 80, 30)];
     self.hapticSlider.minimumValue = 0.0;
     self.hapticSlider.maximumValue = 1.0;
     NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
@@ -94,12 +86,12 @@
     [self.hapticSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.hapticSlider];
 
-    // 6. 震动时长 (新增)
-    UILabel *durationLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 450, 200, 30)];
+    // 5. 震动时长
+    UILabel *durationLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 400, 200, 30)];
     durationLabel.text = @"振动时长调节";
     durationLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:durationLabel];
-    self.durationSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 490, self.window.bounds.size.width - 80, 30)];
+    self.durationSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 440, self.window.bounds.size.width - 80, 30)];
     self.durationSlider.minimumValue = 10.0;
     self.durationSlider.maximumValue = 300.0;
     NSString *durationPath = @"/var/mobile/Library/Preferences/volumefloater_duration.txt";
@@ -108,12 +100,12 @@
     [self.durationSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.durationSlider];
 
-    // 7. 悬浮球大小
-    UILabel *sizeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 540, 200, 30)];
+    // 6. 悬浮球大小
+    UILabel *sizeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 490, 200, 30)];
     sizeLabel.text = @"悬浮球大小";
     sizeLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:sizeLabel];
-    self.sizeSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 580, self.window.bounds.size.width - 80, 30)];
+    self.sizeSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 530, self.window.bounds.size.width - 80, 30)];
     self.sizeSlider.minimumValue = 40.0;
     self.sizeSlider.maximumValue = 80.0;
     NSString *sizePath = @"/var/mobile/Library/Preferences/volumefloater_size.txt";
@@ -122,12 +114,12 @@
     [self.sizeSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.sizeSlider];
 
-    // 8. 悬浮球透明度
-    UILabel *alphaLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 630, 200, 30)];
+    // 7. 悬浮球透明度
+    UILabel *alphaLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 580, 200, 30)];
     alphaLabel.text = @"悬浮球透明度";
     alphaLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:alphaLabel];
-    self.alphaSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 670, self.window.bounds.size.width - 80, 30)];
+    self.alphaSlider = [[UISlider alloc] initWithFrame:CGRectMake(40, 620, self.window.bounds.size.width - 80, 30)];
     self.alphaSlider.minimumValue = 0.3;
     self.alphaSlider.maximumValue = 1.0;
     NSString *alphaPath = @"/var/mobile/Library/Preferences/volumefloater_alpha.txt";
@@ -136,8 +128,8 @@
     [self.alphaSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.alphaSlider];
 
-    // 9. 悬浮球颜色
-    UILabel *colorLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 720, 200, 30)];
+    // 8. 悬浮球颜色
+    UILabel *colorLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 670, 200, 30)];
     colorLabel.text = @"悬浮球底色";
     colorLabel.font = [UIFont systemFontOfSize:18];
     [scrollView addSubview:colorLabel];
@@ -150,7 +142,7 @@
     
     for (int i = 0; i < 5; i++) {
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.frame = CGRectMake(40 + i * 55, 760, 40, 40);
+        btn.frame = CGRectMake(40 + i * 55, 710, 40, 40);
         btn.backgroundColor = uiColors[i];
         btn.layer.cornerRadius = 20;
         btn.tag = i;
@@ -162,9 +154,9 @@
     }
     [self updateColorButtonBorders];
 
-    // 10. 选图与清除
+    // 9. 选择自定义图 / 清除图片
     UIButton *imageBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    imageBtn.frame = CGRectMake(40, 820, (self.window.bounds.size.width - 90) / 2, 45);
+    imageBtn.frame = CGRectMake(40, 770, (self.window.bounds.size.width - 90) / 2, 45);
     [imageBtn setTitle:@"选择自定义图" forState:UIControlStateNormal];
     imageBtn.backgroundColor = [UIColor systemBlueColor];
     [imageBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -173,7 +165,7 @@
     [scrollView addSubview:imageBtn];
 
     UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    clearBtn.frame = CGRectMake(50 + (self.window.bounds.size.width - 90) / 2, 820, (self.window.bounds.size.width - 90) / 2, 45);
+    clearBtn.frame = CGRectMake(50 + (self.window.bounds.size.width - 90) / 2, 770, (self.window.bounds.size.width - 90) / 2, 45);
     [clearBtn setTitle:@"清除图片" forState:UIControlStateNormal];
     clearBtn.backgroundColor = [UIColor systemRedColor];
     [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -218,8 +210,9 @@
 }
 
 - (void)switchChanged:(UISwitch *)sender {
-    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"toggleState"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+    [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
     [self syncState:sender.isOn];
     [self triggerTestHaptic];
 }
@@ -230,15 +223,6 @@
     NSString *path = @"/var/mobile/Library/Preferences/volumefloater_time.txt";
     [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self uiChanged:nil];
-}
-
-- (void)customHapticChanged:(UISwitch *)sender {
-    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"customHapticState"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    NSString *path = @"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt";
-    [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    [self uiChanged:nil];
-    [self triggerTestHaptic];
 }
 
 - (void)hapticChanged:(UISlider *)sender {
@@ -261,33 +245,23 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 测试高级震动
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
-        BOOL isCustom = [[NSUserDefaults standardUserDefaults] boolForKey:@"customHapticState"];
-        
-        if (isCustom && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
-            // 使用 CoreHaptics 自定义模式
-            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticSlider.value];
-            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
-            
-            // 时长转换为秒
-            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.durationSlider.value / 1000.0)];
-            
-            NSError *error = nil;
-            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-            if (!error) {
-                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) {
-                    [player startAtTime:0 error:&error];
-                }
-            }
+        if (self.hapticSlider.value >= 0.85) {
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+            [gen prepare];
+            [gen impactOccurred];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+                [gen2 impactOccurred];
+            });
         } else {
-            // 传统模式测试
             UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-            if (self.hapticSlider.value < 0.3) style = UIImpactFeedbackStyleLight;
-            else if (self.hapticSlider.value > 0.7) style = UIImpactFeedbackStyleHeavy;
-            
+            if (self.hapticSlider.value < 0.3) {
+                style = UIImpactFeedbackStyleLight;
+            } else if (self.hapticSlider.value > 0.6) {
+                style = UIImpactFeedbackStyleHeavy;
+            }
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
             [gen prepare];
             [gen impactOccurredWithIntensity:self.hapticSlider.value];
