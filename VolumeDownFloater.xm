@@ -1,8 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <objc/runtime.h>
-#import <objc/message.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -43,7 +41,6 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) id fbsObserver;
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -106,47 +103,35 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 核心大招：使用系统的 FBSOrientationObserver 监听真实的界面方向
-        [self setupFBSObserver];
+        // 核心大招：通过检测当前前台 App 的界面尺寸来判断横竖屏
+        [NSTimer scheduledTimerWithTimeInterval:0.2 target:self selector:@selector(checkUISize) userInfo:nil repeats:YES];
     });
 }
 
-- (void)setupFBSObserver {
-    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
-    if (FBSClass) {
-        self.fbsObserver = [[FBSClass alloc] init];
-        
-        // 监听方向变化的回调
-        void (^handler)(long long, double, double) = ^(long long orientation, double rotation, double transition) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self applyFBSOrientation:orientation];
-            });
-        };
-        
-        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"setHandler:")]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"setHandler:"), handler);
-        }
-        
-        // 启动时先主动获取一次当前方向
-        if ([self.fbsObserver respondsToSelector:NSSelectorFromString(@"activeOrientation")]) {
-            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
-            [self applyFBSOrientation:currentOri];
+// 最安全的判定法：完全不依赖私有API，不依赖重力感应
+- (void)checkUISize {
+    if (self.window.hidden) return;
+    
+    BOOL isLandscape = NO;
+    
+    if (@available(iOS 13.0, *)) {
+        // 获取当前处于活跃状态的前台场景（比如王者荣耀全屏时的场景）
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *activeScene = (UIWindowScene *)scene;
+                CGRect bounds = activeScene.coordinateSpace.bounds;
+                // 如果界面的宽度大于高度，说明绝对是全屏横屏状态
+                if (bounds.size.width > bounds.size.height) {
+                    isLandscape = YES;
+                }
+                break;
+            }
         }
     }
-}
-
-// FBSOrientation 的枚举值：1=竖屏，2=倒置，3=左横，4=右横
-- (void)applyFBSOrientation:(long long)orientation {
-    CGFloat targetAngle = 0;
     
-    if (orientation == 3) {
-        targetAngle = M_PI_2;   // 左横
-    } else if (orientation == 4) {
-        targetAngle = -M_PI_2;  // 右横
-    } else {
-        targetAngle = 0;        // 竖屏
-    }
+    CGFloat targetAngle = isLandscape ? -M_PI_2 : 0;
     
+    // 平滑过渡
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -169,9 +154,8 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible && self.fbsObserver) {
-            long long currentOri = ((long long (*)(id, SEL))objc_msgSend)(self.fbsObserver, NSSelectorFromString(@"activeOrientation"));
-            [self applyFBSOrientation:currentOri];
+        if (visible) {
+            [self checkUISize];
         }
     });
 }
