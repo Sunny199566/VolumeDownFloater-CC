@@ -50,6 +50,8 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 @property (nonatomic, assign) BOOL isHiddenState; 
 
+// 自定义菜单相关
+@property (strong, nonatomic) UIView *menuView;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
@@ -163,39 +165,82 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 长按：弹出控制菜单
+// 长按：弹出纯 UIView 的自绘菜单，绝对不拉伸
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
-        
-        // 弹出系统原生菜单，居中显示，绝不影响游戏体验
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"悬浮球控制" message:nil preferredStyle:UIAlertControllerStyleAlert];
-        
-        // 选项1：旋转
-        [alert addAction:[UIAlertAction actionWithTitle:@"旋转 90 度" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            [self rotate90];
-        }]];
-        
-        // 选项2：隐藏/恢复
-        if (self.isHiddenState) {
-            [alert addAction:[UIAlertAction actionWithTitle:@"恢复显示" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-                [self restoreAlpha];
-            }]];
-        } else {
-            [alert addAction:[UIAlertAction actionWithTitle:@"临时隐身" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-                [self hideAlpha];
-            }]];
-        }
-        
-        // 选项3：取消
-        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-        
-        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+        [self showCustomMenu];
     }
 }
 
-// 旋转动画
-- (void)rotate90 {
+// 纯手工打造极简卡片菜单，绝对不跟随系统旋转错乱
+- (void)showCustomMenu {
+    if (self.menuView) { [self.menuView removeFromSuperview]; self.menuView = nil; }
+    
+    // 获取当前屏幕最大尺寸（横屏的宽/竖屏的高）
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat maxW = MAX(screenBounds.size.width, screenBounds.size.height);
+    CGFloat maxH = MAX(screenBounds.size.width, screenBounds.size.height);
+    
+    // 绝对铺满整个屏幕的黑色遮罩
+    self.menuView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, maxW, maxH)];
+    self.menuView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+    
+    // 强制居中，无视任何旋转
+    self.menuView.center = CGPointMake(self.window.bounds.size.width/2, self.window.bounds.size.height/2);
+    if (fabs(self.currentAngle) > 1.0) {
+        self.menuView.center = CGPointMake(self.window.bounds.size.width/2, self.window.bounds.size.height/2);
+        // 横屏时，把遮罩旋转回去
+        self.menuView.transform = CGAffineTransformMakeRotation(self.currentAngle);
+    }
+    
+    // 纯代码创建卡片
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 150)];
+    card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0]; // 深灰纯色
+    card.layer.cornerRadius = 12;
+    card.center = CGPointMake(maxW/2, maxH/2); // 强制在屏幕物理正中间
+    [self.menuView addSubview:card];
+    
+    // 选项1：旋转
+    UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    rotateBtn.frame = CGRectMake(0, 0, 200, 50);
+    [rotateBtn setTitle:@"旋转 90 度" forState:UIControlStateNormal];
+    [rotateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    rotateBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [rotateBtn addTarget:self action:@selector(actionRotate) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:rotateBtn];
+    
+    UIView *line1 = [[UIView alloc] initWithFrame:CGRectMake(0, 50, 200, 1)];
+    line1.backgroundColor = [UIColor darkGrayColor];
+    [card addSubview:line1];
+    
+    // 选项2：隐藏/恢复
+    UIButton *hideBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    hideBtn.frame = CGRectMake(0, 51, 200, 50);
+    [hideBtn setTitle:self.isHiddenState ? @"恢复显示" : @"临时隐身" forState:UIControlStateNormal];
+    [hideBtn setTitleColor:self.isHiddenState ? [UIColor systemGreenColor] : [UIColor redColor] forState:UIControlStateNormal];
+    hideBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [hideBtn addTarget:self action:@selector(actionHide) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:hideBtn];
+    
+    UIView *line2 = [[UIView alloc] initWithFrame:CGRectMake(0, 101, 200, 1)];
+    line2.backgroundColor = [UIColor darkGrayColor];
+    [card addSubview:line2];
+    
+    // 选项3：取消
+    UIButton *cancelBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    cancelBtn.frame = CGRectMake(0, 102, 200, 48);
+    [cancelBtn setTitle:@"取消" forState:UIControlStateNormal];
+    [cancelBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
+    cancelBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [cancelBtn addTarget:self action:@selector(actionCancel) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:cancelBtn];
+    
+    [self.window.rootViewController.view addSubview:self.menuView];
+}
+
+- (void)actionRotate {
+    [self hideMenu];
     self.currentAngle += M_PI_2;
     if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
     [UIView animateWithDuration:0.3 animations:^{
@@ -205,22 +250,34 @@ void simulateVolumeDown(void) {
     [gen impactOccurred];
 }
 
-// 隐藏动画
-- (void)hideAlpha {
-    self.isHiddenState = YES;
-    [UIView animateWithDuration:0.3 animations:^{
-        self.floatBtn.alpha = 0.02;
-    }];
+- (void)actionHide {
+    [self hideMenu];
+    if (!self.isHiddenState) {
+        self.isHiddenState = YES;
+        [UIView animateWithDuration:0.3 animations:^{ self.floatBtn.alpha = 0.02; }];
+    } else {
+        self.isHiddenState = NO;
+        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
+        CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+        [UIView animateWithDuration:0.3 animations:^{ self.floatBtn.alpha = normalAlpha; }];
+    }
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [gen impactOccurred];
 }
 
-// 恢复显示动画
-- (void)restoreAlpha {
-    self.isHiddenState = NO;
-    NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
-    CGFloat normalAlpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
-    [UIView animateWithDuration:0.3 animations:^{
-        self.floatBtn.alpha = normalAlpha;
-    }];
+- (void)actionCancel {
+    [self hideMenu];
+}
+
+- (void)hideMenu {
+    if (self.menuView) {
+        [UIView animateWithDuration:0.2 animations:^{
+            self.menuView.alpha = 0;
+        } completion:^(BOOL finished) {
+            [self.menuView removeFromSuperview];
+            self.menuView = nil;
+        }];
+    }
 }
 
 - (void)updateUI {
@@ -309,7 +366,7 @@ void simulateVolumeDown(void) {
 }
 
 - (void)handleTouchUpInside {
-    if (self.window.hidden || self.isHiddenState) return;
+    if (self.window.hidden || self.isHiddenState || self.menuView) return; // 菜单开着不触发脚本
     
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
