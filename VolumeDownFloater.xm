@@ -29,10 +29,18 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
+// 核心保险 1：创建一个绝对禁止系统自动旋转的 ViewController
+@interface FloaterViewController : UIViewController
+@end
+@implementation FloaterViewController
+- (BOOL)shouldAutorotate { return NO; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
+@end
+
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel; // 新增：专门用来显示文字和旋转
+@property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -66,57 +74,58 @@ void simulateVolumeDown(void) {
         self.window.frame = CGRectMake(20, 150, btnSize, btnSize);
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
-        self.window.rootViewController = [UIViewController new];
+        
+        // 使用禁止旋转的 Controller
+        self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         self.window.hidden = YES;
 
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // 1. 创建圆形背景按钮（去掉默认的 Title，防止旋转时出现阴影残影）
+        // 背景圆形按钮，完全不参与旋转
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        self.floatBtn.frame = self.window.rootViewController.view.bounds;
+        self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         self.floatBtn.layer.cornerRadius = btnSize / 2.0;
         self.floatBtn.layer.masksToBounds = YES;
-        self.floatBtn.adjustsImageWhenHighlighted = NO; // 防止点击时变暗
+        self.floatBtn.adjustsImageWhenHighlighted = NO;
         
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
-        // 2. 创建独立的文字标签，放在球的中间
-        self.titleLabel = [[UILabel alloc] initWithFrame:self.floatBtn.bounds];
+        // 文字 Label，只转这个玩意儿
+        self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.titleLabel.textColor = [UIColor whiteColor];
         self.titleLabel.textAlignment = NSTextAlignmentCenter;
         self.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
-        self.titleLabel.userInteractionEnabled = NO; // 让点击事件穿透给底部的按钮
+        self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
         [self updateTitle];
         
-        // 监听设备方向变化
         [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-// 核心修复：只旋转文字标签，背景球不动
+// 核心保险 2：只对 Label 施加旋转，强制覆盖之前的任何形变
 - (void)handleRotation {
     UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
-    CGAffineTransform transform = CGAffineTransformIdentity;
+    CGFloat angle = 0;
     
     if (orientation == UIDeviceOrientationLandscapeLeft) {
-        transform = CGAffineTransformMakeRotation(M_PI_2);
+        angle = M_PI_2;
     } else if (orientation == UIDeviceOrientationLandscapeRight) {
-        transform = CGAffineTransformMakeRotation(-M_PI_2);
+        angle = -M_PI_2;
     } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
-        transform = CGAffineTransformMakeRotation(M_PI);
+        angle = M_PI;
     }
     
-    // 只改变 titleLabel 的 transform，球完全保持原样
     [UIView animateWithDuration:0.3 animations:^{
-        self.titleLabel.transform = transform;
+        // 让文字围绕中心点旋转
+        self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
     }];
 }
 
