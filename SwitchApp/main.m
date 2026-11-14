@@ -203,10 +203,17 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 同步改成 Medium，让你在 App 里滑动时能感受到真实的强弱变化
+// 三段式混合震动测试
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+        if (self.hapticSlider.value < 0.3) {
+            style = UIImpactFeedbackStyleLight;
+        } else if (self.hapticSlider.value > 0.7) {
+            style = UIImpactFeedbackStyleHeavy;
+        }
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+        [gen prepare];
         [gen impactOccurredWithIntensity:self.hapticSlider.value];
     }
 }
