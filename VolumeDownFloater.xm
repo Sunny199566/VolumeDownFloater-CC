@@ -152,7 +152,10 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
-        self.timeBottomLabel.adjustsTimeToFitWidth = YES;
+        
+        // 修复了拼写错误：adjustsFontSizeToFitWidth
+        self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
+        
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
