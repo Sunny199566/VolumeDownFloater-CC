@@ -29,6 +29,27 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
+void simulateVolumeUp(void) {
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!handle) return;
+    IOHIDEventCreateKeyboardEvent_t createEvent = (IOHIDEventCreateKeyboardEvent_t)dlsym(handle, "IOHIDEventCreateKeyboardEvent");
+    IOHIDEventSystemClientCreate_t createClient = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
+    IOHIDEventSystemClientDispatchEvent_t dispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
+    if (createEvent && createClient && dispatchEvent) {
+        IOHIDEventSystemClientRef client = createClient(kCFAllocatorDefault);
+        if (client) {
+            uint64_t timestamp = mach_absolute_time();
+            IOHIDEventRef downEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xE9, true, 0);
+            if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
+            usleep(50000);
+            IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xE9, false, 0);
+            if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
+            CFRelease(client);
+        }
+    }
+    dlclose(handle);
+}
+
 @interface FloaterViewController : UIViewController
 @end
 @implementation FloaterViewController
@@ -83,7 +104,8 @@ void simulateVolumeDown(void) {
         self.window.hidden = YES;
 
         self.hapticIntensity = 0.8;
-        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        // 改为 Heavy (重击感)，配合你的自定义强度，能发挥最大的威力
+        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
         [self.hapticGenerator prepare];
 
         self.mainContainer = [[UIView alloc] init];
@@ -95,17 +117,25 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
+        UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleSingleTap)];
+        singleTap.numberOfTapsRequired = 1;
+        [self.floatBtn addGestureRecognizer:singleTap];
         
-        // 修复手势冲突：添加拖拽手势
+        UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap)];
+        doubleTap.numberOfTapsRequired = 2;
+        [self.floatBtn addGestureRecognizer:doubleTap];
+        
+        [singleTap requireGestureRecognizerToFail:doubleTap];
+        
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         [self.floatBtn addGestureRecognizer:panGesture];
         
-        // 添加长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
-        // 让长按手势不要干扰拖拽手势
+        
+        [singleTap requireGestureRecognizerToFail:panGesture];
+        [doubleTap requireGestureRecognizerToFail:panGesture];
         [longPress requireGestureRecognizerToFail:panGesture];
         
         [self.mainContainer addSubview:self.floatBtn];
@@ -135,14 +165,12 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 初始化位置（如果之前卡在边缘，强制重置回默认位置）
         CGFloat px = 20, py = 150;
         NSString *pxStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" encoding:NSUTF8StringEncoding error:nil];
         NSString *pyStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" encoding:NSUTF8StringEncoding error:nil];
         if (pxStr.length > 0 && pyStr.length > 0) {
             CGFloat savedX = [pxStr floatValue];
             CGFloat savedY = [pyStr floatValue];
-            // 检查坐标是否合理，防止旧版 bug 留下的无效坐标导致 UI 消失
             if (savedX > 0 && savedX < [UIScreen mainScreen].bounds.size.width && savedY > 0 && savedY < [UIScreen mainScreen].bounds.size.height) {
                 px = savedX;
                 py = savedY;
@@ -156,7 +184,6 @@ void simulateVolumeDown(void) {
 
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. 读取各项配置
         NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
         if (hapticStr.length > 0) self.hapticIntensity = [hapticStr floatValue];
 
@@ -169,17 +196,11 @@ void simulateVolumeDown(void) {
         NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
         if (colorStr.length == 0) colorStr = @"red";
 
-        // ====== 修复核心：动态调整 Window 和 Container 的大小，确保点击区域和视觉完全一致 ======
         CGFloat totalHeight = size + 25;
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        
-        // 记录旧的中心点
         CGPoint oldCenter = self.window.center;
         
-        // 修改窗口大小
         self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
         
-        // 同步容器大小
         self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
@@ -193,14 +214,12 @@ void simulateVolumeDown(void) {
         
         self.timeBottomLabel.frame = CGRectMake(0, size + 2, size, 20);
 
-        // 3. 应用颜色
         UIColor *bgColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         if ([colorStr isEqualToString:@"blue"]) bgColor = [UIColor systemBlueColor];
         else if ([colorStr isEqualToString:@"green"]) bgColor = [UIColor systemGreenColor];
         else if ([colorStr isEqualToString:@"black"]) bgColor = [UIColor blackColor];
         else if ([colorStr isEqualToString:@"clear"]) bgColor = [UIColor clearColor];
 
-        // 4. 应用图片
         NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
         if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
             self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
@@ -211,7 +230,6 @@ void simulateVolumeDown(void) {
             self.floatBtn.backgroundColor = bgColor;
         }
         
-        // 5. 时间
         NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
         [self.timeTimer invalidate];
@@ -224,7 +242,6 @@ void simulateVolumeDown(void) {
             self.timeBottomLabel.hidden = YES;
         }
         
-        // 6. 文字
         NSString *title = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" encoding:NSUTF8StringEncoding error:nil];
         if (!title || title.length == 0) title = @"音量-";
         self.titleLabel.text = title;
@@ -256,7 +273,8 @@ void simulateVolumeDown(void) {
     });
 }
 
-- (void)btnTapped {
+// 单击：按照你设定的最强力度震动
+- (void)handleSingleTap {
     if (self.window.hidden) return;
     if (@available(iOS 13.0, *)) {
         [self.hapticGenerator impactOccurredWithIntensity:self.hapticIntensity];
@@ -267,58 +285,9 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 拖动逻辑
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self.window];
-    CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
-    
-    CGFloat windowWidth = self.window.bounds.size.width;
-    CGFloat windowHeight = self.window.bounds.size.height;
-    
-    CGRect screenBounds = [UIScreen mainScreen].bounds;
-    CGFloat screenWidth = screenBounds.size.width;
-    CGFloat screenHeight = screenBounds.size.height;
-    
-    BOOL isRotated = fabs(self.currentAngle) > 1.0;
-    CGFloat effWidth = isRotated ? windowHeight : windowWidth;
-    CGFloat effHeight = isRotated ? windowWidth : windowHeight;
-    
-    CGFloat minX = effWidth / 2.0 + 10.0;
-    CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
-    CGFloat minY = effHeight / 2.0 + 20.0; 
-    CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
-    
-    newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-    newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
-    
-    self.window.center = newCenter;
-    [pan setTranslation:CGPointZero inView:self.window];
-
-    // 松手时只保存坐标
-    if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
-        [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
-}
-@end
-
-static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] setVisibility:YES];
-}
-
-static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] setVisibility:NO];
-}
-
-static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] updateUI];
-}
-
-__attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
+// 双击：不震动（或者极轻微），防止干扰你对单击重震的判断
+- (void)handleDoubleTap {
+    if (self.window.hidden) return;
+    // 双击不震动，纯静音操作，仅恢复音量
+    simulateVolumeUp();
 }
