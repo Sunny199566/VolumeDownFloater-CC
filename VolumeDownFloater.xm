@@ -51,6 +51,9 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
+// 极简状态：记录上一次是横屏还是竖屏
+@property (nonatomic, assign) NSInteger lastSystemOrientation;
+
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
@@ -91,6 +94,7 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
+        self.lastSystemOrientation = 1; // 初始假设为竖屏
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -160,20 +164,19 @@ void simulateVolumeDown(void) {
         }
         self.window.center = CGPointMake(px, py);
 
-        // 启动无视旋转锁定的底层方向轮询
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
 
         [self updateUI];
     });
 }
 
-// 核心逻辑：无视旋转锁定，强制读取系统底层的真实方向
+// 核心极简状态机：只在横竖切换时响应一次！
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
     long long sysOrientation = 1; // 默认竖屏
     
-    // 安全读取 FBS 底层方向（不挂监听，读完就丢，绝不崩溃）
+    // 安全读取真实界面方向（无视旋转锁）
     Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
     if (FBSClass) {
         id observer = [[FBSClass alloc] init];
@@ -183,27 +186,29 @@ void simulateVolumeDown(void) {
         }
     }
     
-    CGFloat targetAngle = 0;
+    // 判断当前是横还是竖 (3和4是横屏)
+    NSInteger currentState = (sysOrientation == 3 || sysOrientation == 4) ? 2 : 1;
     
-    // sysOrientation: 1 是竖屏，3 是左横屏，4 是右横屏
-    if (sysOrientation == 3 || sysOrientation == 4) {
-        // 只要检测到横屏，不管是左横还是右横，统统顺时针 90 度
-        targetAngle = M_PI_2;
-    } else {
-        // 竖屏，死锁 0 度
-        targetAngle = 0;
-    }
-    
-    // 平滑过渡
-    if (fabs(self.currentAngle - targetAngle) > 0.1) {
+    // 核心逻辑：只有当你进出横屏的那一瞬间，才执行动作！
+    if (currentState != self.lastSystemOrientation) {
+        self.lastSystemOrientation = currentState;
+        
+        CGFloat targetAngle = 0;
+        if (currentState == 2) {
+            targetAngle = M_PI_2; // 进横屏，自动顺时针90度
+        } else {
+            targetAngle = 0; // 回竖屏，自动回正
+        }
+        
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
     }
+    // 平时（状态没变），这里什么都不做。你长按转到了80度，它也不会拉你回来。
 }
 
-// 长按：手动强制旋转 90 度（用于你想上下颠倒的时候）
+// 长按：手动强制旋转 90 度
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
