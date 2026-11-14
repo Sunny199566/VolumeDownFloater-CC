@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -42,17 +41,13 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) CMMotionManager *motionManager;
-
 @property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) int stableCount;
-@property (nonatomic, assign) CGFloat targetMotionAngle;
 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateTitle;
-- (void)handleDoubleTap;
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
 @end
 
 @implementation FloaterManager
@@ -95,15 +90,16 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        // 单击触发音量减
+        // 1. 单击触发音量减
         [self.floatBtn addTarget:self action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
-        // 拖拽移动位置
+        
+        // 2. 拖拽移动位置
         [self.floatBtn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
         
-        // 终极防线：双击手动旋转（防止有些游戏彻底屏蔽系统信号）
-        UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap)];
-        doubleTap.numberOfTapsRequired = 2;
-        [self.floatBtn addGestureRecognizer:doubleTap];
+        // 3. 长按 0.5 秒手动旋转（完美替代双击防误触）
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+        longPress.minimumPressDuration = 0.5;
+        [self.floatBtn addGestureRecognizer:longPress];
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
@@ -117,48 +113,41 @@ void simulateVolumeDown(void) {
         [self updateTitle];
         
         self.currentAngle = 0;
-        self.targetMotionAngle = 0;
-        self.stableCount = 0;
         
-        // 开启物理辅助判定（防误触版）
-        self.motionManager = [[CMMotionManager alloc] init];
-        if (self.motionManager.isDeviceMotionAvailable) {
-            [self.motionManager startDeviceMotionUpdates];
-            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
-        }
-        
-        // 定时读取 UI 界面宽高比（针对普通横屏视频和 App）
+        // 纯 UI 界面判定（读取前台界面宽高，自动横屏）
         [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkUIOrientation) userInfo:nil repeats:YES];
     });
 }
 
-// 双击手动旋转兜底
-- (void)handleDoubleTap {
-    self.currentAngle += M_PI_2;
-    if (self.currentAngle >= M_PI * 2) {
-        self.currentAngle = 0;
+// 长按旋转逻辑
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    // 只有按下的一瞬间才触发，防止按住不放一直转
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.currentAngle += M_PI_2;
+        if (self.currentAngle >= M_PI * 2) {
+            self.currentAngle = 0;
+        }
+        
+        [UIView animateWithDuration:0.3 animations:^{
+            self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
+        }];
+        
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [gen impactOccurred];
     }
-    
-    [UIView animateWithDuration:0.3 animations:^{
-        self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-    }];
-    
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [gen impactOccurred];
 }
 
-// 第一重判定：读取前台界面的宽高比（无视重力，无视物理姿态）
+// 纯 UI 判定：如果当前界面变横了，自动转横
 - (void)checkUIOrientation {
     if (self.window.hidden) return;
     
-    // 只有在这个模式下才生效（针对视频 App）
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
             UIWindowScene *activeScene = (UIWindowScene *)scene;
             CGRect bounds = activeScene.coordinateSpace.bounds;
             
             if (bounds.size.width > bounds.size.height) {
-                // 界面变横，覆盖物理状态
+                // 界面变宽，说明进入了横屏视频等，自动转到横屏
                 if (fabs(self.currentAngle - (-M_PI_2)) > 0.1) {
                     self.currentAngle = -M_PI_2;
                     [UIView animateWithDuration:0.3 animations:^{
@@ -166,42 +155,6 @@ void simulateVolumeDown(void) {
                     }];
                 }
                 return;
-            }
-        }
-    }
-}
-
-// 第二重判定：物理陀螺仪防误触（针对游戏强制横屏，且系统拒绝给宽高的情况）
-- (void)checkMotion {
-    if (self.window.hidden) return;
-    
-    CMDeviceMotion *motion = self.motionManager.deviceMotion;
-    if (!motion) return;
-    
-    double x = motion.gravity.x;
-    
-    CGFloat motionAngle = 0;
-    if (x > 0.8) {
-        motionAngle = -M_PI_2;
-    } else if (x < -0.8) {
-        motionAngle = M_PI_2;
-    } else {
-        motionAngle = 0;
-    }
-    
-    // 防抖缓冲：如果你没横彻底，或者手抖，这里不会触发
-    if (fabs(motionAngle - self.targetMotionAngle) > 0.1) {
-        self.targetMotionAngle = motionAngle;
-        self.stableCount = 0;
-    } else {
-        self.stableCount++;
-        // 必须稳定保持 0.5 秒 (0.1 * 5次)
-        if (self.stableCount == 5) {
-            if (fabs(self.currentAngle - self.targetMotionAngle) > 0.1) {
-                self.currentAngle = self.targetMotionAngle;
-                [UIView animateWithDuration:0.3 animations:^{
-                    self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-                }];
             }
         }
     }
