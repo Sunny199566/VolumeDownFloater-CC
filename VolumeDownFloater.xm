@@ -166,18 +166,17 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 终极破防：直接读取硬件物理分辨率，无视一切强制横屏/重力/侧躺
+// 终极破防：直接读取硬件物理分辨率
 - (void)checkPhysicalOrientation {
     if (self.window.hidden || self.isHiddenState) return;
     
-    // 获取底层物理屏幕的真实尺寸
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
     
     CGFloat targetAngle = 0;
     
-    // 只要宽度大于高度，说明游戏强制横屏了，直接转！
+    // 修复：将横屏角度改为顺时针旋转 (M_PI_2)，适配王者等主流游戏的横屏姿态
     if (screenSize.width > screenSize.height) {
-        targetAngle = -M_PI_2; // 永远转为正向横屏
+        targetAngle = M_PI_2; 
     } else {
         targetAngle = 0;
     }
