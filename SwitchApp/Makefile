@@ -8,5 +8,6 @@ APPLICATION_NAME = VolumeSwitch
 VolumeSwitch_FILES = main.m
 VolumeSwitch_FRAMEWORKS = UIKit
 VolumeSwitch_INFOPLIST_FILE = Info.plist
+VolumeSwitch_CODESIGN_FLAGS = -Sentitlements.plist
 
 include $(THEOS_MAKE_PATH)/application.mk
