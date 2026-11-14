@@ -100,22 +100,17 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        // 开启硬件方向监听
         [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(deviceOrientationDidChange) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-// 当物理方向改变时触发
 - (void)deviceOrientationDidChange {
-    // 取消上一次还没执行完的旋转任务（防抖）
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyRotation) object:nil];
-    
-    // 延迟 0.3 秒执行。如果在这 0.3 秒内你又把手机放平了，任务会被取消，文字就不会乱转。
     [self performSelector:@selector(applyRotation) withObject:nil afterDelay:0.3];
 }
 
-// 真正执行旋转的方法
+// 核心修复：修正了旋转的方向，并且去掉了倒立旋转
 - (void)applyRotation {
     if (self.window.hidden) return;
     
@@ -123,19 +118,20 @@ void simulateVolumeDown(void) {
     CGFloat angle = 0;
     
     if (orientation == UIDeviceOrientationLandscapeLeft) {
-        angle = -M_PI_2;
-    } else if (orientation == UIDeviceOrientationLandscapeRight) {
+        // 手机向左横过来，文字应该顺时针转90度
         angle = M_PI_2;
-    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
-        angle = M_PI;
+    } else if (orientation == UIDeviceOrientationLandscapeRight) {
+        // 手机向右横过来，文字应该逆时针转90度
+        angle = -M_PI_2;
     } else if (orientation == UIDeviceOrientationPortrait) {
         angle = 0;
+    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
+        angle = 0; // 倒立时，文字也保持正立，不跟着倒过来
     } else {
-        // FaceUp / FaceDown (平放桌面) 时保持当前角度不变
+        // 平放桌面等情况，保持现状不动
         return;
     }
     
-    // 平滑旋转文字
     [UIView animateWithDuration:0.3 animations:^{
         self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
     }];
@@ -156,7 +152,7 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         if (visible) {
-            [self applyRotation]; // 显示时立即同步一次方向
+            [self applyRotation];
         }
     });
 }
