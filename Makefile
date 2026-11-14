@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = VolumeDownFloater
 VolumeDownFloater_FILES = VolumeDownFloater.xm
-VolumeDownFloater_FRAMEWORKS = UIKit
+VolumeDownFloater_FRAMEWORKS = UIKit CoreHaptics
 VolumeDownFloater_CFLAGS = -fobjc-arc -Wno-everything
 
 include $(THEOS_MAKE_PATH)/tweak.mk
