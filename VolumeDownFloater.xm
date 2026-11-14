@@ -51,7 +51,7 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
-// 核心：记录上一次的界面方向状态 (1为竖屏，2为横屏)
+// 记录上一次的真实界面方向
 @property (nonatomic, assign) NSInteger lastOrientationState;
 
 @property (strong, nonatomic) NSTimer *timeTimer;
@@ -96,6 +96,9 @@ void simulateVolumeDown(void) {
         self.isCustomHaptic = NO;
         self.lastOrientationState = -1; // 初始未知状态
 
+        // 开启电池监控
+        [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -115,7 +118,6 @@ void simulateVolumeDown(void) {
         
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
-        // 刚才报错漏掉的等号已经补上了
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         panGesture.cancelsTouchesInView = NO; 
         [self.floatBtn addGestureRecognizer:panGesture];
@@ -142,7 +144,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:12];
+        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:10]; // 字体稍微改小一点，适应时间+电量
         self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
@@ -177,7 +179,6 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
-    // 1. 先读 FBS 底层方向
     Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
     if (FBSClass) {
         id observer = [[FBSClass alloc] init];
@@ -187,29 +188,26 @@ void simulateVolumeDown(void) {
         }
     }
     
-    // 2. 如果读到竖屏，再尝试用上帝视角向 UIApplication 索要真实界面方向
     if (sysOrientation == 1 || sysOrientation == 2) {
         SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
         if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
             long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
             if (activeOri == 3 || activeOri == 4) {
-                sysOrientation = activeOri; // 如果真实是横屏，强制覆盖
+                sysOrientation = activeOri;
             }
         }
     }
     
-    // 3. 判定当前状态：3 或 4 是横屏
     NSInteger currentState = (sysOrientation == 3 || sysOrientation == 4) ? 2 : 1;
     
-    // 4. 状态机：只有跨状态时才转一次，转完就锁死，绝对不晃
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
         CGFloat targetAngle = 0;
         if (currentState == 2) {
-            targetAngle = M_PI_2; // 横屏自动转90度
+            targetAngle = M_PI_2;
         } else {
-            targetAngle = 0; // 竖屏自动回正
+            targetAngle = 0;
         }
         
         self.currentAngle = targetAngle;
@@ -309,10 +307,20 @@ void simulateVolumeDown(void) {
     });
 }
 
+// 核心修改：显示 时间 + 电量百分比
 - (void)updateTimeText {
+    // 1. 获取当前时间 (去掉秒)
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"HH:mm:ss"];
-    self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
+    [formatter setDateFormat:@"HH:mm"];
+    NSString *timeStr = [formatter stringFromDate:[NSDate date]];
+    
+    // 2. 获取当前电量
+    float batteryLevel = [[UIDevice currentDevice] batteryLevel];
+    int batteryPercent = (int)(batteryLevel * 100);
+    if (batteryPercent < 0) batteryPercent = 0; // 极少数情况读到负数
+    
+    // 3. 组合显示
+    self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ | %d%%", timeStr, batteryPercent];
 }
 
 - (void)setVisibility:(BOOL)visible {
@@ -391,7 +399,7 @@ void simulateVolumeDown(void) {
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
 }
-@end // 刚才漏掉的结尾，补上了
+@end
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
