@@ -37,6 +37,14 @@ void simulateVolumeDown(void) {
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
 @end
 
+// 新增：专门用于菜单的 Controller，强制锁死竖屏方向，防止窗口跟着系统转
+@interface MenuViewController : UIViewController
+@end
+@implementation MenuViewController
+- (BOOL)shouldAutorotate { return NO; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
+@end
+
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIView *mainContainer; 
@@ -50,8 +58,7 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) BOOL isCustomHaptic;
 @property (nonatomic, assign) BOOL isHiddenState; 
 
-// 菜单相关
-@property (strong, nonatomic) UIView *menuView;
+@property (strong, nonatomic) UIWindow *menuWindow;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
@@ -172,38 +179,52 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 终极防乱转：不建新窗口，直接在当前窗口画遮罩
+// 终极修复：全屏窗口 + 强制竖屏，保证任何地方都能点到，且绝对不乱转
 - (void)showCustomMenu {
-    if (self.menuView) {
+    if (self.menuWindow) {
         [self hideMenu];
         return;
     }
     
-    // 取屏幕最大物理尺寸，确保横竖屏都能铺满
-    CGRect screenBounds = [UIScreen mainScreen].bounds;
-    CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
+    UIWindowScene *windowScene = self.window.windowScene;
+    if (@available(iOS 13.0, *)) {
+        self.menuWindow = [[UIWindow alloc] initWithWindowScene:windowScene];
+    } else {
+        self.menuWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    }
     
-    // 全屏遮罩直接盖在主窗口的 View 上
-    self.menuView = [[UIView alloc] initWithFrame:CGRectMake(-maxDim/2, -maxDim/2, maxDim*2, maxDim*2)];
-    self.menuView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+    // 锁定为屏幕尺寸
+    self.menuWindow.frame = [UIScreen mainScreen].bounds;
+    self.menuWindow.windowLevel = UIWindowLevelAlert + 3000;
+    self.menuWindow.backgroundColor = [UIColor clearColor]; 
     
-    // 因为底层 window 坐标系是锁死的，我们只要把遮罩的中心点对准屏幕正中间即可
-    self.menuView.center = CGPointMake(self.window.rootViewController.view.bounds.size.width / 2.0, self.window.rootViewController.view.bounds.size.height / 2.0);
+    // 核心修复：使用锁定竖屏方向的 Controller
+    MenuViewController *vc = [[MenuViewController alloc] init];
+    vc.view.backgroundColor = [UIColor clearColor];
+    self.menuWindow.rootViewController = vc;
+    self.menuWindow.hidden = NO;
     
-    // 让遮罩可以响应点击取消
+    // 铺满全屏的黑色遮罩
+    UIView *maskView = [[UIView alloc] initWithFrame:vc.view.bounds];
+    maskView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+    
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(actionCancel)];
-    [self.menuView addGestureRecognizer:tap];
+    [maskView addGestureRecognizer:tap];
 
-    // 菜单卡片
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 160)];
     card.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     card.layer.cornerRadius = 12;
     
-    // 卡片永远居中在遮罩正中间
-    card.center = CGPointMake(maxDim, maxDim); // 因为在 -maxDim/2 的基础上画，所以偏移到中心
+    // 强制中心点
+    CGFloat centerX = vc.view.bounds.size.width / 2.0;
+    CGFloat centerY = vc.view.bounds.size.height / 2.0;
     
-    // 如果当前是横屏(游戏里)，我们把文字反向旋转一下，保证字是正对你的
-    card.transform = CGAffineTransformMakeRotation(-self.currentAngle);
+    // 如果当前是横屏，反向旋转卡片，保证字正
+    if (fabs(self.currentAngle) > 1.0) {
+        card.transform = CGAffineTransformMakeRotation(self.currentAngle);
+    }
+    
+    card.center = CGPointMake(centerX, centerY);
     
     // 1. 旋转
     UIButton *rotateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -240,8 +261,8 @@ void simulateVolumeDown(void) {
     [cancelBtn addTarget:self action:@selector(actionCancel) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:cancelBtn];
     
-    [self.menuView addSubview:card];
-    [self.window.rootViewController.view addSubview:self.menuView];
+    [maskView addSubview:card];
+    [vc.view addSubview:maskView];
 }
 
 - (void)actionRotate {
@@ -275,9 +296,9 @@ void simulateVolumeDown(void) {
 }
 
 - (void)hideMenu {
-    if (self.menuView) {
-        [self.menuView removeFromSuperview];
-        self.menuView = nil;
+    if (self.menuWindow) {
+        self.menuWindow.hidden = YES;
+        self.menuWindow = nil;
     }
 }
 
@@ -367,7 +388,7 @@ void simulateVolumeDown(void) {
 }
 
 - (void)handleTouchUpInside {
-    if (self.window.hidden || self.isHiddenState || self.menuView) return;
+    if (self.window.hidden || self.isHiddenState || self.menuWindow) return;
     
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
