@@ -8,6 +8,7 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
 typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
 
+// 模拟音量减
 void simulateVolumeDown(void) {
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!handle) return;
@@ -22,27 +23,6 @@ void simulateVolumeDown(void) {
             if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
             usleep(50000);
             IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xEA, false, 0);
-            if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
-            CFRelease(client);
-        }
-    }
-    dlclose(handle);
-}
-
-void simulateVolumeUp(void) {
-    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!handle) return;
-    IOHIDEventCreateKeyboardEvent_t createEvent = (IOHIDEventCreateKeyboardEvent_t)dlsym(handle, "IOHIDEventCreateKeyboardEvent");
-    IOHIDEventSystemClientCreate_t createClient = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
-    IOHIDEventSystemClientDispatchEvent_t dispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
-    if (createEvent && createClient && dispatchEvent) {
-        IOHIDEventSystemClientRef client = createClient(kCFAllocatorDefault);
-        if (client) {
-            uint64_t timestamp = mach_absolute_time();
-            IOHIDEventRef downEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xE9, true, 0);
-            if (downEvent) { dispatchEvent(client, downEvent); CFRelease(downEvent); }
-            usleep(50000);
-            IOHIDEventRef upEvent = createEvent(kCFAllocatorDefault, timestamp, 0x0C, 0xE9, false, 0);
             if (upEvent) { dispatchEvent(client, upEvent); CFRelease(upEvent); }
             CFRelease(client);
         }
@@ -116,25 +96,18 @@ void simulateVolumeUp(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleSingleTap)];
-        singleTap.numberOfTapsRequired = 1;
-        [self.floatBtn addGestureRecognizer:singleTap];
+        // 核心：按下瞬间立即触发，零延迟！
+        [self.floatBtn addTarget:self action:@selector(handleTouchDown) forControlEvents:UIControlEventTouchDown];
         
-        UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap)];
-        doubleTap.numberOfTapsRequired = 2;
-        [self.floatBtn addGestureRecognizer:doubleTap];
-        
-        [singleTap requireGestureRecognizerToFail:doubleTap];
-        
+        // 拖拽手势
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         [self.floatBtn addGestureRecognizer:panGesture];
         
+        // 长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.5;
         [self.floatBtn addGestureRecognizer:longPress];
         
-        [singleTap requireGestureRecognizerToFail:panGesture];
-        [doubleTap requireGestureRecognizerToFail:panGesture];
         [longPress requireGestureRecognizerToFail:panGesture];
         
         [self.mainContainer addSubview:self.floatBtn];
@@ -272,20 +245,20 @@ void simulateVolumeUp(void) {
     });
 }
 
-- (void)handleSingleTap {
+// 核心：按下瞬间极速触发
+- (void)handleTouchDown {
     if (self.window.hidden) return;
+    
+    // 瞬间震动（使用你设置的强度）
     if (@available(iOS 13.0, *)) {
         [self.hapticGenerator impactOccurredWithIntensity:self.hapticIntensity];
     } else {
         [self.hapticGenerator impactOccurred];
     }
     [self.hapticGenerator prepare]; 
+    
+    // 瞬间触发音量减（执行脚本）
     simulateVolumeDown();
-}
-
-- (void)handleDoubleTap {
-    if (self.window.hidden) return;
-    simulateVolumeUp();
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
@@ -321,8 +294,7 @@ void simulateVolumeUp(void) {
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
 }
-
-@end // <--- 就是这个@end，必须要有！
+@end
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     [[FloaterManager sharedInstance] setVisibility:YES];
