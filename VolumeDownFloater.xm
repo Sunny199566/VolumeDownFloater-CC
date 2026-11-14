@@ -51,6 +51,10 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) CHHapticEngine *hapticEngine;
 
+// 核心新增：边缘吸附状态
+@property (nonatomic, assign) BOOL isDocked;
+@property (nonatomic, assign) BOOL dockedToLeft;
+
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
@@ -77,7 +81,7 @@ void simulateVolumeDown(void) {
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 60, 85)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 150, 80, 100)]; }
         
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
@@ -88,6 +92,7 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
+        self.isDocked = NO;
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -181,12 +186,12 @@ void simulateVolumeDown(void) {
         NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
         if (colorStr.length == 0) colorStr = @"red";
 
+        // 窗口尺寸留余量，防止被裁剪
         CGFloat totalHeight = size + 25;
         CGPoint oldCenter = self.window.center;
+        self.window.frame = CGRectMake(oldCenter.x - size/2.0 - 10, oldCenter.y - totalHeight/2.0 - 10, size + 20, totalHeight + 20);
         
-        self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
-        
-        self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
+        self.mainContainer.frame = CGRectMake(10, 10, size, totalHeight);
         self.floatBtn.frame = CGRectMake(0, 0, size, size);
         self.floatBtn.layer.cornerRadius = size / 2.0;
         self.floatBtn.alpha = alpha;
@@ -244,6 +249,12 @@ void simulateVolumeDown(void) {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
         
+        // 如果处于收纳状态，长按直接恢复并退出
+        if (self.isDocked) {
+            [self undock];
+            return;
+        }
+
         self.currentAngle += M_PI_2;
         if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
         [UIView animateWithDuration:0.2 animations:^{
@@ -260,37 +271,56 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 核心：高级震动触发
+// 边缘收纳动画
+- (void)dockToEdge {
+    self.isDocked = YES;
+    CGFloat offset = self.dockedToLeft ? -25.0 : 25.0;
+    [UIView animateWithDuration:0.3 animations:^{
+        self.mainContainer.transform = CGAffineTransformMakeTranslation(offset, 0);
+        self.floatBtn.alpha = 0.5; // 收纳时半透明
+    }];
+}
+
+// 解除收纳动画
+- (void)undock {
+    self.isDocked = NO;
+    [UIView animateWithDuration:0.3 animations:^{
+        self.mainContainer.transform = CGAffineTransformIdentity;
+        // 恢复原本的透明度
+        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
+        self.floatBtn.alpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
+    }];
+}
+
+// 点击
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
+    // 如果处于收纳状态，点一下只是弹出来，不执行脚本
+    if (self.isDocked) {
+        [self undock];
+        return;
+    }
+    
     if (@available(iOS 13.0, *)) {
         if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
-            // 使用 CoreHaptics 精准控制时长和强度
             CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticIntensity];
             CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
-            
             CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.hapticDuration / 1000.0)];
-            
             NSError *error = nil;
             CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
             if (!error) {
                 id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) {
-                    [player startAtTime:0 error:&error];
-                }
+                if (!error) [player startAtTime:0 error:&error];
             }
         } else {
-            // 传统极强连击模式
             UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
             if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
             else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
-            
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
             [gen prepare];
             [gen impactOccurredWithIntensity:self.hapticIntensity];
             
-            // 如果拉满，加个余震
             if (self.hapticIntensity >= 0.85) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
@@ -306,6 +336,10 @@ void simulateVolumeDown(void) {
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
+        // 如果正在拖拽，先解除收纳状态
+        if (self.isDocked) {
+            [self undock];
+        }
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
         CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
@@ -321,9 +355,10 @@ void simulateVolumeDown(void) {
         CGFloat effWidth = isRotated ? windowHeight : windowWidth;
         CGFloat effHeight = isRotated ? windowWidth : windowHeight;
         
-        CGFloat minX = effWidth / 2.0 + 10.0;
-        CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
-        CGFloat minY = effHeight / 2.0 + 20.0; 
+        // 限制在屏幕内，防止拖飞
+        CGFloat minX = effWidth / 2.0;
+        CGFloat maxX = screenWidth - effWidth / 2.0;
+        CGFloat minY = effHeight / 2.0 + 10.0; 
         CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
         
         newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
@@ -332,10 +367,26 @@ void simulateVolumeDown(void) {
         self.window.center = newCenter;
         [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
+        // 保存位置
         NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
         NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        
+        // 检查是否贴近边缘并触发收纳
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        CGFloat screenWidth = screenBounds.size.width;
+        
+        // 靠近左边缘 (小于 30 像素)
+        if (self.window.center.x < 30) {
+            self.dockedToLeft = YES;
+            [self dockToEdge];
+        } 
+        // 靠近右边缘
+        else if (self.window.center.x > screenWidth - 30) {
+            self.dockedToLeft = NO;
+            [self dockToEdge];
+        }
     }
 }
 @end
