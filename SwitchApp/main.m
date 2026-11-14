@@ -21,7 +21,6 @@
     self.window.rootViewController = vc;
     self.window.hidden = NO;
 
-    // 使用 UIScrollView 防止小屏幕装不下
     UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.window.bounds];
     scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 750);
     [vc.view addSubview:scrollView];
@@ -32,7 +31,6 @@
     headerLabel.textAlignment = NSTextAlignmentCenter;
     [scrollView addSubview:headerLabel];
 
-    // 1. 显示悬浮球
     UILabel *switchLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 110, 200, 30)];
     switchLabel.text = @"显示悬浮球";
     switchLabel.font = [UIFont systemFontOfSize:18];
@@ -42,7 +40,6 @@
     [self.toggleSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.toggleSwitch];
 
-    // 2. 实时时间
     UILabel *timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 160, 200, 30)];
     timeLabel.text = @"显示实时时间";
     timeLabel.font = [UIFont systemFontOfSize:18];
@@ -52,7 +49,6 @@
     [self.timeSwitch addTarget:self action:@selector(timeSwitchChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.timeSwitch];
 
-    // 3. 文字修改
     UILabel *textLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 210, 200, 30)];
     textLabel.text = @"悬浮球内部文字";
     textLabel.font = [UIFont systemFontOfSize:18];
@@ -67,7 +63,6 @@
     [self.titleTextField addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
     [scrollView addSubview:self.titleTextField];
 
-    // 4. 震动强度
     UILabel *hapticLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 310, 200, 30)];
     hapticLabel.text = @"单击震动强度";
     hapticLabel.font = [UIFont systemFontOfSize:18];
@@ -77,11 +72,10 @@
     self.hapticSlider.maximumValue = 1.0;
     NSString *hapticPath = @"/var/mobile/Library/Preferences/volumefloater_haptic.txt";
     NSString *hapticStr = [NSString stringWithContentsOfFile:hapticPath encoding:NSUTF8StringEncoding error:nil];
-    self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 0.8; 
+    self.hapticSlider.value = (hapticStr && hapticStr.length > 0) ? [hapticStr floatValue] : 1.0; // 默认改成 100% 试试
     [self.hapticSlider addTarget:self action:@selector(hapticChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.hapticSlider];
 
-    // 5. 悬浮球大小
     UILabel *sizeLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 400, 200, 30)];
     sizeLabel.text = @"悬浮球大小";
     sizeLabel.font = [UIFont systemFontOfSize:18];
@@ -95,7 +89,6 @@
     [self.sizeSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.sizeSlider];
 
-    // 6. 悬浮球透明度
     UILabel *alphaLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 490, 200, 30)];
     alphaLabel.text = @"悬浮球透明度";
     alphaLabel.font = [UIFont systemFontOfSize:18];
@@ -109,7 +102,6 @@
     [self.alphaSlider addTarget:self action:@selector(uiChanged:) forControlEvents:UIControlEventValueChanged];
     [scrollView addSubview:self.alphaSlider];
 
-    // 7. 悬浮球颜色
     UILabel *colorLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 580, 200, 30)];
     colorLabel.text = @"悬浮球底色";
     colorLabel.font = [UIFont systemFontOfSize:18];
@@ -135,7 +127,6 @@
     }
     [self updateColorButtonBorders];
 
-    // 8. 选图与清除
     UIButton *imageBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     imageBtn.frame = CGRectMake(40, 680, (self.window.bounds.size.width - 90) / 2, 45);
     [imageBtn setTitle:@"选择自定义图" forState:UIControlStateNormal];
@@ -212,9 +203,10 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
+// 测试震动也改成 Heavy
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
         [gen impactOccurredWithIntensity:self.hapticSlider.value];
     }
 }
