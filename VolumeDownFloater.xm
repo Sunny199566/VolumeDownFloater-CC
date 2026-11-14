@@ -41,11 +41,11 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
+@property (nonatomic, assign) UIInterfaceOrientation currentOrientation; // 记录当前方向防抖
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateTitle;
-- (void)handleRotation;
 @end
 
 @implementation FloaterManager
@@ -101,24 +101,42 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        // 核心改动：监听界面真实旋转通知，而不是重力感应
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleRotation) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+        self.currentOrientation = UIInterfaceOrientationPortrait;
+        
+        // 核心：用定时器每隔 0.5 秒轮询一次真实界面方向。
+        // 这样只有界面彻底转了，它才反应，彻底告别“稍微倾斜就转”的误触！
+        [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAndRotate) userInfo:nil repeats:YES];
     });
 }
 
-- (void)handleRotation {
-    // 获取当前 App 界面的真实方向
-    UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
-    CGFloat angle = 0;
+- (void)checkAndRotate {
+    if (self.window.hidden) return;
     
-    if (orientation == UIInterfaceOrientationLandscapeLeft) {
-        angle = -M_PI_2; // 注意这里的角度和物理方向是反的
-    } else if (orientation == UIInterfaceOrientationLandscapeRight) {
+    UIInterfaceOrientation realOrientation = UIInterfaceOrientationPortrait;
+    
+    // 获取系统底层的真实界面方向（仅 iOS 13+ 有效）
+    if (@available(iOS 13.0, *)) {
+        if (self.window.windowScene) {
+            realOrientation = self.window.windowScene.interfaceOrientation;
+        }
+    } else {
+        realOrientation = [UIApplication sharedApplication].statusBarOrientation;
+    }
+
+    // 如果方向和上次记录的一样，就不做任何操作，防止画面闪烁
+    if (realOrientation == self.currentOrientation) return;
+    self.currentOrientation = realOrientation;
+
+    CGFloat angle = 0;
+    if (realOrientation == UIInterfaceOrientationLandscapeLeft) {
+        angle = -M_PI_2;
+    } else if (realOrientation == UIInterfaceOrientationLandscapeRight) {
         angle = M_PI_2;
-    } else if (orientation == UIInterfaceOrientationPortraitUpsideDown) {
+    } else if (realOrientation == UIInterfaceOrientationPortraitUpsideDown) {
         angle = M_PI;
     }
     
+    // 只转文字，背景球不转
     [UIView animateWithDuration:0.3 animations:^{
         self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
     }];
@@ -138,9 +156,6 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
-        if (visible) {
-            [self handleRotation];
-        }
     });
 }
 
