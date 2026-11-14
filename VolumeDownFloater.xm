@@ -51,8 +51,8 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
 
-// 极简状态：记录上一次是横屏还是竖屏
-@property (nonatomic, assign) NSInteger lastSystemOrientation;
+// 记录上一次的真实界面方向
+@property (nonatomic, assign) NSInteger lastOrientationState;
 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
@@ -94,7 +94,7 @@ void simulateVolumeDown(void) {
         self.hapticIntensity = 1.0;
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
-        self.lastSystemOrientation = 1; // 初始假设为竖屏
+        self.lastOrientationState = -1; // 初始未知状态
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -115,7 +115,7 @@ void simulateVolumeDown(void) {
         
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
-        UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        UIPanGestureRecognizer *panGesture [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         panGesture.cancelsTouchesInView = NO; 
         [self.floatBtn addGestureRecognizer:panGesture];
         
@@ -170,13 +170,12 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 核心极简状态机：只在横竖切换时响应一次！
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
-    long long sysOrientation = 1; // 默认竖屏
+    long long sysOrientation = 1; 
     
-    // 安全读取真实界面方向（无视旋转锁）
+    // 安全读取 FBS 底层方向
     Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
     if (FBSClass) {
         id observer = [[FBSClass alloc] init];
@@ -186,12 +185,23 @@ void simulateVolumeDown(void) {
         }
     }
     
+    // 尝试直接向 UIApplication 索要真实界面方向 (上帝视角)
+    if (sysOrientation == 1 || sysOrientation == 2) {
+        SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
+        if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
+            long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
+            if (activeOri == 3 || activeOri == 4) {
+                sysOrientation = activeOri;
+            }
+        }
+    }
+    
     // 判断当前是横还是竖 (3和4是横屏)
     NSInteger currentState = (sysOrientation == 3 || sysOrientation == 4) ? 2 : 1;
     
-    // 核心逻辑：只有当你进出横屏的那一瞬间，才执行动作！
-    if (currentState != self.lastSystemOrientation) {
-        self.lastSystemOrientation = currentState;
+    // 只有当状态发生切换时，才执行旋转
+    if (currentState != self.lastOrientationState) {
+        self.lastOrientationState = currentState;
         
         CGFloat targetAngle = 0;
         if (currentState == 2) {
@@ -205,10 +215,8 @@ void simulateVolumeDown(void) {
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
     }
-    // 平时（状态没变），这里什么都不做。你长按转到了80度，它也不会拉你回来。
 }
 
-// 长按：手动强制旋转 90 度
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -223,180 +231,4 @@ void simulateVolumeDown(void) {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
     }
-}
-
-- (void)updateUI {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (hapticStr.length > 0) self.hapticIntensity = [hapticStr floatValue];
-
-        NSString *durStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (durStr.length > 0) self.hapticDuration = [durStr floatValue];
-        
-        NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
-        self.isCustomHaptic = [customStr isEqualToString:@"1"];
-
-        NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
-        CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
-
-        NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
-        CGFloat alpha = (alphaStr.length > 0) ? [alphaStr floatValue] : 0.9;
-
-        NSString *colorStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_color.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (colorStr.length == 0) colorStr = @"red";
-
-        CGFloat totalHeight = size + 25;
-        CGPoint oldCenter = self.window.center;
-        
-        self.window.frame = CGRectMake(oldCenter.x - size/2.0, oldCenter.y - totalHeight/2.0, size, totalHeight);
-        
-        self.mainContainer.frame = CGRectMake(0, 0, size, totalHeight);
-        self.floatBtn.frame = CGRectMake(0, 0, size, size);
-        self.floatBtn.layer.cornerRadius = size / 2.0;
-        self.floatBtn.alpha = alpha;
-        
-        self.titleLabel.frame = self.floatBtn.bounds;
-        self.titleLabel.font = [UIFont systemFontOfSize:size * 0.25 weight:UIFontWeightMedium];
-        
-        self.bgImageView.frame = self.floatBtn.bounds;
-        self.bgImageView.layer.cornerRadius = size / 2.0;
-        
-        self.timeBottomLabel.frame = CGRectMake(0, size + 2, size, 20);
-
-        UIColor *bgColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
-        if ([colorStr isEqualToString:@"blue"]) bgColor = [UIColor systemBlueColor];
-        else if ([colorStr isEqualToString:@"green"]) bgColor = [UIColor systemGreenColor];
-        else if ([colorStr isEqualToString:@"black"]) bgColor = [UIColor blackColor];
-        else if ([colorStr isEqualToString:@"clear"]) bgColor = [UIColor clearColor];
-
-        NSString *imgPath = @"/var/mobile/Library/Preferences/volumefloater_bg.png";
-        if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
-            self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
-            self.bgImageView.hidden = NO;
-            self.floatBtn.backgroundColor = [UIColor clearColor];
-        } else {
-            self.bgImageView.hidden = YES;
-            self.floatBtn.backgroundColor = bgColor;
-        }
-        
-        NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
-        BOOL showTime = [timeStatus isEqualToString:@"1"];
-        [self.timeTimer invalidate];
-        self.timeTimer = nil;
-        if (showTime) {
-            self.timeBottomLabel.hidden = NO;
-            [self updateTimeText];
-            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
-        } else {
-            self.timeBottomLabel.hidden = YES;
-        }
-        
-        NSString *title = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (!title || title.length == 0) title = @"音量-";
-        self.titleLabel.text = title;
-        self.titleLabel.hidden = NO;
-    });
-}
-
-- (void)updateTimeText {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"HH:mm:ss"];
-    self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
-}
-
-- (void)setVisibility:(BOOL)visible {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.window.hidden = !visible;
-    });
-}
-
-- (void)handleTouchUpInside {
-    if (self.window.hidden) return;
-    
-    if (@available(iOS 13.0, *)) {
-        if (self.isCustomHaptic && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
-            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticIntensity];
-            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
-            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.hapticDuration / 1000.0)];
-            NSError *error = nil;
-            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-            if (!error) {
-                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) [player startAtTime:0 error:&error];
-            }
-        } else {
-            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-            if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
-            else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-            [gen prepare];
-            [gen impactOccurredWithIntensity:self.hapticIntensity];
-            
-            if (self.hapticIntensity >= 0.85) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-                    [gen2 impactOccurred];
-                });
-            }
-        }
-    }
-    
-    simulateVolumeDown();
-}
-
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    if (pan.state == UIGestureRecognizerStateBegan) {
-        [self.floatBtn cancelTrackingWithEvent:nil];
-    } else if (pan.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [pan translationInView:self.window];
-        
-        CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
-        
-        BOOL isRotated = fabs(self.currentAngle) > 1.0;
-        
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat screenWidth = MAX(screenBounds.size.width, screenBounds.size.height);
-        CGFloat screenHeight = MAX(screenBounds.size.width, screenBounds.size.height);
-        
-        CGFloat winW = self.window.bounds.size.width;
-        CGFloat winH = self.window.bounds.size.height;
-        CGFloat ballW = isRotated ? winH : winW;
-        CGFloat ballH = isRotated ? winW : winH;
-        
-        CGFloat minX = ballW / 2.0 + 10.0;
-        CGFloat maxX = screenWidth - ballW / 2.0 - 10.0;
-        CGFloat minY = ballH / 2.0 + 20.0; 
-        CGFloat maxY = screenHeight - ballH / 2.0 - 10.0;
-        
-        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
-        
-        self.window.center = newCenter;
-        [pan setTranslation:CGPointZero inView:self.window];
-    } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
-        [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
-}
-@end
-
-static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] setVisibility:YES];
-}
-
-static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] setVisibility:NO];
-}
-
-static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[FloaterManager sharedInstance] updateUI];
-}
-
-__attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
