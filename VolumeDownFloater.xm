@@ -92,18 +92,15 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        // 1. 单击使用最稳定的 TouchUpInside
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
-        // 2. 拖拽手势
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        panGesture.cancelsTouchesInView = NO; // 允许按钮继续追踪点击，我们在内部手动取消
+        panGesture.cancelsTouchesInView = NO; 
         [self.floatBtn addGestureRecognizer:panGesture];
         
-        // 3. 长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-        longPress.minimumPressDuration = 0.4; // 按住 0.4 秒瞬间触发
-        longPress.allowableMovement = 15; // 允许手指微微发抖，不会中断长按
+        longPress.minimumPressDuration = 0.4; 
+        longPress.allowableMovement = 15; 
         [self.floatBtn addGestureRecognizer:longPress];
         
         [self.mainContainer addSubview:self.floatBtn];
@@ -223,10 +220,8 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-// 长按：到点瞬间触发，无需抬手
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        // 触发长按瞬间，取消按钮的点击追踪，防止松手时触发单击
         [self.floatBtn cancelTrackingWithEvent:nil];
         
         self.currentAngle += M_PI_2;
@@ -245,20 +240,34 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 点击触发
+// 核心：超强震动连击逻辑
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-        if (self.hapticIntensity < 0.3) {
-            style = UIImpactFeedbackStyleLight;
-        } else if (self.hapticIntensity > 0.7) {
-            style = UIImpactFeedbackStyleHeavy;
+        if (self.hapticIntensity >= 0.85) {
+            // 终极暴击：纯原生 Heavy + 极短二连击
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+            [gen prepare];
+            [gen impactOccurred]; // 第一下原生满血
+            
+            // 0.06秒后补第二下，模拟物理撞击的余震，强度拉满
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+                [gen2 impactOccurred];
+            });
+        } else {
+            // 普通区间保持线性调节
+            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+            if (self.hapticIntensity < 0.3) {
+                style = UIImpactFeedbackStyleLight;
+            } else if (self.hapticIntensity > 0.6) {
+                style = UIImpactFeedbackStyleHeavy;
+            }
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+            [gen prepare];
+            [gen impactOccurredWithIntensity:self.hapticIntensity];
         }
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-        [gen prepare];
-        [gen impactOccurredWithIntensity:self.hapticIntensity];
     } else {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [gen impactOccurred];
@@ -269,7 +278,6 @@ void simulateVolumeDown(void) {
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
-        // 一旦开始拖拽，立刻取消按钮点击事件！
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
