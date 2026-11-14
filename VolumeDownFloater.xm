@@ -79,23 +79,22 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
-        // 只取最大的物理长边（852）作为窗口尺寸，绝对安全，绝不崩溃
-        CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
-        
+        // 核心修复：使用 2000x2000 的大窗口，但要配合正确的中心点和拖拽逻辑
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, maxDim, maxDim)]; }
+        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
-        self.window.frame = CGRectMake(0, 0, maxDim, maxDim);
-        self.window.center = CGPointMake(screenBounds.size.width / 2.0, screenBounds.size.height / 2.0);
+        self.window.frame = CGRectMake(0, 0, 2000, 2000);
+        // 窗口正中心对准屏幕正中心
+        self.window.center = CGPointMake([UIScreen mainScreen].bounds.size.width / 2.0, [UIScreen mainScreen].bounds.size.height / 2.0);
+        
         self.window.windowLevel = UIWindowLevelAlert + 2000;
         self.window.backgroundColor = [UIColor clearColor];
         self.window.rootViewController = [FloaterViewController new];
         self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
         
-        // 【关键修复】：直接强制显示，防止被 APP 隐藏的通知卡住
+        // 强制显示，防止各种隐藏通知卡住
         self.window.hidden = NO; 
 
         self.hapticIntensity = 1.0;
@@ -115,9 +114,8 @@ void simulateVolumeDown(void) {
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
-        
-        // 【关键修复】：不再读取旧坐标，强制把球放回屏幕默认位置
-        self.mainContainer.center = CGPointMake(maxDim / 2.0, maxDim / 2.0);
+        // 球永远固定在 2000x2000 窗口的绝对正中心 (1000, 1000)
+        self.mainContainer.center = CGPointMake(1000, 1000);
         [self.window.rootViewController.view addSubview:self.mainContainer];
 
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -350,44 +348,74 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
-// 终极无敌边界计算（基于最大长边安全窗口，限制不拖出边界）
+// 终极拖拽：直接移动 Window，无视系统截断！
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [pan translationInView:self.window];
-        CGPoint newCenter = CGPointMake(self.mainContainer.center.x + translation.x, self.mainContainer.center.y + translation.y);
+        CGPoint translation = [pan translationInView:pan.view];
+        
+        // 我们直接移动整个巨大的 Window
+        CGPoint newWindowCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 1.0;
         
         CGRect screenBounds = [UIScreen mainScreen].bounds;
-        CGFloat maxDim = MAX(screenBounds.size.width, screenBounds.size.height);
-        CGFloat minDim = MIN(screenBounds.size.width, screenBounds.size.height);
+        CGFloat screenW = screenBounds.size.width;
+        CGFloat screenH = screenBounds.size.height;
         
-        CGFloat visualW = isRotated ? maxDim : minDim;
-        CGFloat visualH = isRotated ? minDim : maxDim;
+        CGFloat maxW = MAX(screenW, screenH);
+        CGFloat minW = MIN(screenW, screenH);
         
+        // 物理屏幕可视区的宽度/高度
+        CGFloat visualW = isRotated ? maxW : minW;
+        CGFloat visualH = isRotated ? minW : maxW;
+        
+        // 球的实际尺寸（考虑旋转）
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
-        // 因为窗口固定在最大长边尺寸的正中心（即 (maxDim/2, maxDim/2)）
-        // 我们需要保证 mainContainer 在屏幕可视范围内的相对位置
-        CGFloat centerX = maxDim / 2.0;
-        CGFloat centerY = maxDim / 2.0;
+        // 限制 Window 中心点的位置，让球死死卡在屏幕边缘
+        // 球在 2000x2000 窗口的正中心，所以窗口中心就是球的中心
+        CGFloat minX = visualW / 2.0 + ballW / 2.0 + 5.0;
+        CGFloat maxX = screenW - visualW / 2.0 - ballW / 2.0 - 5.0;
         
-        CGFloat minX = centerX - visualW / 2.0 + ballW / 2.0 + 5.0;
-        CGFloat maxX = centerX + visualW / 2.0 - ballW / 2.0 - 5.0;
-        CGFloat minY = centerY - visualH / 2.0 + ballH / 2.0 + 20.0; 
-        CGFloat maxY = centerY + visualH / 2.0 - ballH / 2.0 - 10.0;
+        // 如果是横屏，可视区域是 maxW，那么边界计算就变了
+        if (isRotated) {
+            minX = visualW / 2.0 + ballW / 2.0 + 5.0;
+            maxX = screenW - visualW / 2.0 - ballW / 2.0 - 5.0;
+            // 实际上横屏时，窗口往右移，视觉上就是往右移
+        }
         
-        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+        // 对于 Y 轴，直接使用屏幕的真实高度进行限制
+        CGFloat minY = visualH / 2.0 + ballH / 2.0 + 20.0;
+        CGFloat maxY = screenH - visualH / 2.0 - ballH / 2.0 - 10.0;
         
-        self.mainContainer.center = newCenter;
-        [pan setTranslation:CGPointZero inView:self.window];
+        // 算出允许的 Window 中心点范围（基于屏幕）
+        // 其实更简单的做法是：我们直接限制 mainContainer 在屏幕内的视觉位置
+        // 但因为现在拖的是 Window，所以 Window 中心必须位于 [minX, maxX]
+        
+        CGFloat realMinX = ballW / 2.0 + 10.0;
+        CGFloat realMaxX = screenW - ballW / 2.0 - 10.0;
+        CGFloat realMinY = ballH / 2.0 + 20.0;
+        CGFloat realMaxY = screenH - ballH / 2.0 - 10.0;
+        
+        if (isRotated) {
+            realMinX = ballW / 2.0 + 10.0;
+            realMaxX = screenH - ballW / 2.0 - 10.0; // 横屏时宽度变成了屏幕高度
+            realMinY = ballH / 2.0 + 20.0;
+            realMaxY = screenW - ballH / 2.0 - 10.0; // 横屏时高度变成了屏幕宽度
+        }
+        
+        newWindowCenter.x = MAX(realMinX, MIN(newWindowCenter.x, realMaxX));
+        newWindowCenter.y = MAX(realMinY, MIN(newWindowCenter.y, realMaxY));
+        
+        self.window.center = newWindowCenter;
+        
+        [pan setTranslation:CGPointZero inView:pan.view];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        NSString *pxStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.x];
-        NSString *pyStr = [NSString stringWithFormat:@"%f", self.mainContainer.center.y];
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
         [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
