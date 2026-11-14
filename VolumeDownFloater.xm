@@ -70,7 +70,7 @@ void simulateVolumeDown(void) {
         }
         
         CGFloat btnSize = 60.0;
-        CGFloat totalHeight = 85.0; // 留出底下时间的位置
+        CGFloat totalHeight = 85.0;
         
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
@@ -88,7 +88,6 @@ void simulateVolumeDown(void) {
         self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [self.hapticGenerator prepare];
 
-        // ===== 1. 创建球体 =====
         self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.floatBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
@@ -105,7 +104,6 @@ void simulateVolumeDown(void) {
         
         [self.window.rootViewController.view addSubview:self.floatBtn];
         
-        // 球体背景图
         self.bgImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.bgImageView.contentMode = UIViewContentModeScaleAspectFill;
         self.bgImageView.layer.cornerRadius = btnSize / 2.0;
@@ -113,7 +111,6 @@ void simulateVolumeDown(void) {
         self.bgImageView.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.bgImageView];
         
-        // 球体内部文字（居中）
         self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, btnSize, btnSize)];
         self.titleLabel.textColor = [UIColor whiteColor];
         self.titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -121,15 +118,14 @@ void simulateVolumeDown(void) {
         self.titleLabel.userInteractionEnabled = NO;
         [self.floatBtn addSubview:self.titleLabel];
         
-        // ===== 2. 创建球体下方的时间 =====
         self.timeBottomLabel = [[UILabel alloc] initWithFrame:CGRectMake(-10, btnSize + 2, btnSize + 20, 20)];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:12];
-        self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5]; // 半透明黑底
+        self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
-        self.timeBottomLabel.hidden = YES; // 默认隐藏
+        self.timeBottomLabel.hidden = YES;
         [self.window.rootViewController.view addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
@@ -139,21 +135,26 @@ void simulateVolumeDown(void) {
     });
 }
 
+// 从 CFPreferences 读取数据更新 UI
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *imgPath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_bg.png";
-        if ([[NSFileManager defaultManager] fileExistsAtPath:imgPath]) {
-            self.bgImageView.image = [UIImage imageWithContentsOfFile:imgPath];
-            self.bgImageView.hidden = NO;
-            self.floatBtn.backgroundColor = [UIColor clearColor];
+        // 1. 读取自定义图片 (Base64 解码)
+        CFStringRef base64Ref = CFPreferencesCopyAppValue(CFSTR("custom_bg"), CFSTR("com.yourname.volumedownfloater"));
+        if (base64Ref) {
+            NSString *base64String = (__bridge_transfer NSString *)base64Ref;
+            NSData *imgData = [[NSData alloc] initWithBase64EncodedString:base64String options:0];
+            if (imgData) {
+                self.bgImageView.image = [UIImage imageWithData:imgData];
+                self.bgImageView.hidden = NO;
+                self.floatBtn.backgroundColor = [UIColor clearColor];
+            }
         } else {
             self.bgImageView.hidden = YES;
             self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         }
         
-        NSString *timePath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_showtime.txt";
-        NSString *timeStatus = [NSString stringWithContentsOfFile:timePath encoding:NSUTF8StringEncoding error:nil];
-        BOOL showTime = [timeStatus isEqualToString:@"1"];
+        // 2. 读取时间开关
+        Boolean showTime = CFPreferencesGetAppBooleanValue(CFSTR("showtime"), CFSTR("com.yourname.volumedownfloater"), NULL);
         
         [self.timeTimer invalidate];
         self.timeTimer = nil;
@@ -167,11 +168,9 @@ void simulateVolumeDown(void) {
             self.titleLabel.hidden = NO;
             self.timeBottomLabel.hidden = YES;
             
-            NSString *titlePath = @"/var/mobile/Library/Preferences/com.yourname.volumedownfloater_title.txt";
-            NSString *title = [NSString stringWithContentsOfFile:titlePath encoding:NSUTF8StringEncoding error:nil];
-            if (!title || title.length == 0) {
-                title = @"音量-";
-            }
+            CFStringRef titleRef = CFPreferencesCopyAppValue(CFSTR("title"), CFSTR("com.yourname.volumedownfloater"));
+            NSString *title = titleRef ? (__bridge_transfer NSString *)titleRef : @"音量-";
+            if (title.length == 0) title = @" ";
             self.titleLabel.text = title;
         }
     });
@@ -183,7 +182,6 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-// 核心修复：长按旋转时，时间标签跟着一起转！
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         self.currentAngle += M_PI_2;
@@ -194,7 +192,6 @@ void simulateVolumeDown(void) {
         [UIView animateWithDuration:0.3 animations:^{
             self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
             self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
-            // 加入时间标签的旋转
             self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
         
@@ -203,7 +200,6 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 核心修复：自动横屏时，时间标签也跟着一起转！
 - (void)checkUIOrientation {
     if (self.window.hidden) return;
     
@@ -218,7 +214,6 @@ void simulateVolumeDown(void) {
                     [UIView animateWithDuration:0.3 animations:^{
                         self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
                         self.bgImageView.transform = CGAffineTransformMakeRotation(self.currentAngle);
-                        // 加入时间标签的旋转
                         self.timeBottomLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
                     }];
                 }
