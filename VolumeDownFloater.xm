@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -42,7 +41,6 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) CMMotionManager *motionManager;
 @property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -105,41 +103,44 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        self.motionManager = [[CMMotionManager alloc] init];
-        if (self.motionManager.isDeviceMotionAvailable) {
-            [self.motionManager startDeviceMotionUpdates];
-            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
-        }
+        // 核心逻辑：每隔 0.5 秒轮询一次当前界面的真实方向（UI）
+        [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkInterfaceOrientation) userInfo:nil repeats:YES];
     });
 }
 
-// 绝对物理判定：修正了躺着玩手机导致的重力紊乱
-- (void)checkMotion {
+// 纯界面判定法：只看界面，不看重力！
+- (void)checkInterfaceOrientation {
     if (self.window.hidden) return;
     
-    CMDeviceMotion *motion = self.motionManager.deviceMotion;
-    if (!motion) return;
+    UIInterfaceOrientation currentOrientation = UIInterfaceOrientationPortrait;
     
-    double x = motion.gravity.x;
-    double y = motion.gravity.y;
-    
-    CGFloat targetAngle = self.currentAngle;
-    
-    // 核心逻辑：手机竖着拿（不管你是站着还是躺着），Y轴的绝对重力必定大于 0.6。
-    // 只要 Y 轴分量够大，死死锁住竖屏状态（0度）。
-    if (fabs(y) > 0.6) {
-        targetAngle = 0;
-    } 
-    // 只有当 Y 轴分量变小，且 X 轴分量变大（超过0.6），才说明手机物理上真正横过来了。
-    else if (fabs(x) > 0.6) {
-        if (x > 0) {
-            targetAngle = -M_PI_2; // 向右横
-        } else {
-            targetAngle = M_PI_2;  // 向左横
+    // 1. 获取系统的界面方向
+    if (@available(iOS 13.0, *)) {
+        if (self.window.windowScene) {
+            currentOrientation = self.window.windowScene.interfaceOrientation;
         }
+    } else {
+        currentOrientation = [UIApplication sharedApplication].statusBarOrientation;
     }
     
-    // 平滑动画
+    // 2. 兜底逻辑：如果游戏强制横屏但 Scene 没刷新，通过宽高比判断
+    CGRect bounds = self.window.windowScene.coordinateSpace.bounds;
+    if (bounds.size.width > bounds.size.height && UIInterfaceOrientationIsPortrait(currentOrientation)) {
+        // 宽度大于高度，绝对是横屏了
+        currentOrientation = UIInterfaceOrientationLandscapeRight;
+    }
+
+    // 3. 根据界面方向计算文字角度
+    CGFloat targetAngle = 0;
+    if (currentOrientation == UIInterfaceOrientationLandscapeLeft) {
+        targetAngle = M_PI_2;
+    } else if (currentOrientation == UIInterfaceOrientationLandscapeRight) {
+        targetAngle = -M_PI_2;
+    } else {
+        targetAngle = 0; // 竖屏
+    }
+    
+    // 4. 平滑旋转
     if (fabs(self.currentAngle - targetAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -162,6 +163,9 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
+        if (visible) {
+            [self checkInterfaceOrientation];
+        }
     });
 }
 
