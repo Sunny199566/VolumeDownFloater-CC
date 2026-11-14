@@ -46,7 +46,6 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) float hapticIntensity; 
 @property (strong, nonatomic) NSTimer *timeTimer;
-@property (nonatomic, assign) BOOL isDragging; 
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -83,7 +82,6 @@ void simulateVolumeDown(void) {
         self.window.hidden = YES;
 
         self.hapticIntensity = 0.8;
-        self.isDragging = NO;
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -94,18 +92,19 @@ void simulateVolumeDown(void) {
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
+        // 1. 单击使用最稳定的 TouchUpInside
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
+        // 2. 拖拽手势
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        panGesture.cancelsTouchesInView = YES;
+        panGesture.cancelsTouchesInView = NO; // 允许按钮继续追踪点击，我们在内部手动取消
         [self.floatBtn addGestureRecognizer:panGesture];
         
-        // 长按时间从 0.5 秒缩短到 0.4 秒，手感更干脆
+        // 3. 长按手势
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-        longPress.minimumPressDuration = 0.4; 
+        longPress.minimumPressDuration = 0.4; // 按住 0.4 秒瞬间触发
+        longPress.allowableMovement = 15; // 允许手指微微发抖，不会中断长按
         [self.floatBtn addGestureRecognizer:longPress];
-        
-        [longPress requireGestureRecognizerToFail:panGesture];
         
         [self.mainContainer addSubview:self.floatBtn];
         
@@ -224,12 +223,15 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [formatter stringFromDate:[NSDate date]];
 }
 
-// 长按：按住 0.4 秒瞬间触发，无需抬起！
+// 长按：到点瞬间触发，无需抬手
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 触发长按瞬间，取消按钮的点击追踪，防止松手时触发单击
+        [self.floatBtn cancelTrackingWithEvent:nil];
+        
         self.currentAngle += M_PI_2;
         if (self.currentAngle >= M_PI * 2) self.currentAngle = 0;
-        [UIView animateWithDuration:0.2 animations:^{ // 动画也加速到 0.2 秒，更干脆
+        [UIView animateWithDuration:0.2 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         }];
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -245,7 +247,7 @@ void simulateVolumeDown(void) {
 
 // 点击触发
 - (void)handleTouchUpInside {
-    if (self.window.hidden || self.isDragging) return;
+    if (self.window.hidden) return;
     
     if (@available(iOS 13.0, *)) {
         UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
@@ -267,44 +269,38 @@ void simulateVolumeDown(void) {
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
-        self.isDragging = NO;
+        // 一旦开始拖拽，立刻取消按钮点击事件！
+        [self.floatBtn cancelTrackingWithEvent:nil];
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [pan translationInView:self.window];
-        if (fabs(translation.x) > 3 || fabs(translation.y) > 3) {
-            self.isDragging = YES;
-        }
-        if (self.isDragging) {
-            CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
-            
-            CGFloat windowWidth = self.window.bounds.size.width;
-            CGFloat windowHeight = self.window.bounds.size.height;
-            
-            CGRect screenBounds = [UIScreen mainScreen].bounds;
-            CGFloat screenWidth = screenBounds.size.width;
-            CGFloat screenHeight = screenBounds.size.height;
-            
-            BOOL isRotated = fabs(self.currentAngle) > 1.0;
-            CGFloat effWidth = isRotated ? windowHeight : windowWidth;
-            CGFloat effHeight = isRotated ? windowWidth : windowHeight;
-            
-            CGFloat minX = effWidth / 2.0 + 10.0;
-            CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
-            CGFloat minY = effHeight / 2.0 + 20.0; 
-            CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
-            
-            newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-            newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
-            
-            self.window.center = newCenter;
-            [pan setTranslation:CGPointZero inView:self.window];
-        }
+        CGPoint newCenter = CGPointMake(self.window.center.x + translation.x, self.window.center.y + translation.y);
+        
+        CGFloat windowWidth = self.window.bounds.size.width;
+        CGFloat windowHeight = self.window.bounds.size.height;
+        
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        CGFloat screenWidth = screenBounds.size.width;
+        CGFloat screenHeight = screenBounds.size.height;
+        
+        BOOL isRotated = fabs(self.currentAngle) > 1.0;
+        CGFloat effWidth = isRotated ? windowHeight : windowWidth;
+        CGFloat effHeight = isRotated ? windowWidth : windowHeight;
+        
+        CGFloat minX = effWidth / 2.0 + 10.0;
+        CGFloat maxX = screenWidth - effWidth / 2.0 - 10.0;
+        CGFloat minY = effHeight / 2.0 + 20.0; 
+        CGFloat maxY = screenHeight - effHeight / 2.0 - 10.0;
+        
+        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+        
+        self.window.center = newCenter;
+        [pan setTranslation:CGPointZero inView:self.window];
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        if (self.isDragging) {
-            NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
-            NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
-            [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        }
+        NSString *pxStr = [NSString stringWithFormat:@"%f", self.window.center.x];
+        NSString *pyStr = [NSString stringWithFormat:@"%f", self.window.center.y];
+        [pxStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posx.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [pyStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_posy.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
 }
 @end
