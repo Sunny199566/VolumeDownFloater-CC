@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -42,10 +41,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) CMMotionManager *motionManager;
 @property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) CGFloat targetAngle;
-@property (nonatomic, assign) NSInteger stableCount;
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
@@ -106,54 +102,43 @@ void simulateVolumeDown(void) {
         [self updateTitle];
         
         self.currentAngle = 0;
-        self.targetAngle = 0;
-        self.stableCount = 0;
         
-        // 彻底抛弃系统的UI旋转，直接开启物理陀螺仪！
-        self.motionManager = [[CMMotionManager alloc] init];
-        if (self.motionManager.isDeviceMotionAvailable) {
-            [self.motionManager startDeviceMotionUpdates];
-            // 每 0.1 秒检查一次物理重力
-            [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
-        }
+        // 开启设备方向监听（不受锁定影响）
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(deviceOrientationDidChange) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-- (void)checkMotion {
+// 1. 收到方向变化信号时，先取消之前的旋转任务，然后延迟 0.3 秒
+- (void)deviceOrientationDidChange {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyRotation) object:nil];
+    [self performSelector:@selector(applyRotation) withObject:nil afterDelay:0.3];
+}
+
+// 2. 0.3 秒后，如果手机依然保持那个方向，才真正执行旋转
+- (void)applyRotation {
     if (self.window.hidden) return;
     
-    CMDeviceMotion *motion = self.motionManager.deviceMotion;
-    if (!motion) return;
+    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
+    CGFloat targetAngle = self.currentAngle;
     
-    double x = motion.gravity.x;
-    double y = motion.gravity.y;
-    
-    CGFloat newAngle = 0;
-    
-    // 物理判定：如果横向的倾斜度大于竖向，说明手机横过来了
-    if (fabs(x) > fabs(y)) {
-        if (x < 0) {
-            newAngle = M_PI_2; // 向左横屏
-        } else {
-            newAngle = -M_PI_2; // 向右横屏
-        }
+    if (orientation == UIDeviceOrientationLandscapeLeft) {
+        targetAngle = M_PI_2; // 向左横
+    } else if (orientation == UIDeviceOrientationLandscapeRight) {
+        targetAngle = -M_PI_2; // 向右横
+    } else if (orientation == UIDeviceOrientationPortrait) {
+        targetAngle = 0; // 竖屏
+    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
+        targetAngle = 0; // 倒置不转
     } else {
-        newAngle = 0; // 竖屏
+        return; // 平放桌面，保持不动
     }
     
-    // 如果算出来的目标角度和当前的记录不一样，进入防抖缓冲期
-    if (fabs(newAngle - self.targetAngle) > 0.1) {
-        self.targetAngle = newAngle;
-        self.stableCount = 0;
-    } else {
-        self.stableCount++;
-        // 必须稳定持续 0.3 秒 (0.1s * 3次) 才会真正执行旋转动画
-        if (self.stableCount == 3 && fabs(self.currentAngle - self.targetAngle) > 0.1) {
-            self.currentAngle = self.targetAngle;
-            [UIView animateWithDuration:0.3 animations:^{
-                self.titleLabel.transform = CGAffineTransformMakeRotation(self.currentAngle);
-            }];
-        }
+    if (targetAngle != self.currentAngle) {
+        self.currentAngle = targetAngle;
+        [UIView animateWithDuration:0.3 animations:^{
+            self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
+        }];
     }
 }
 
@@ -171,6 +156,9 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
+        if (visible) {
+            [self applyRotation]; // 重新出现时立刻同步一次方向
+        }
     });
 }
 
