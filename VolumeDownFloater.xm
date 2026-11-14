@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-#import <CoreMotion/CoreMotion.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -42,8 +41,6 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIButton *floatBtn;
 @property (strong, nonatomic) UILabel *titleLabel;
 @property (strong, nonatomic) UIImpactFeedbackGenerator *hapticGenerator;
-@property (strong, nonatomic) CMMotionManager *motionManager;
-@property (nonatomic, assign) CGFloat currentAngle;
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
@@ -103,66 +100,45 @@ void simulateVolumeDown(void) {
         
         [self updateTitle];
         
-        self.currentAngle = 0;
-        
-        self.motionManager = [[CMMotionManager alloc] init];
-        if (self.motionManager.isAccelerometerAvailable) {
-            [self.motionManager startAccelerometerUpdates];
-            [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkMotion) userInfo:nil repeats:YES];
-        }
+        // 开启硬件方向监听
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(deviceOrientationDidChange) name:UIDeviceOrientationDidChangeNotification object:nil];
     });
 }
 
-// 核心修改：加入了滞回判定和极高阈值，极其防抖！
-- (void)checkMotion {
+// 当物理方向改变时触发
+- (void)deviceOrientationDidChange {
+    // 取消上一次还没执行完的旋转任务（防抖）
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyRotation) object:nil];
+    
+    // 延迟 0.3 秒执行。如果在这 0.3 秒内你又把手机放平了，任务会被取消，文字就不会乱转。
+    [self performSelector:@selector(applyRotation) withObject:nil afterDelay:0.3];
+}
+
+// 真正执行旋转的方法
+- (void)applyRotation {
     if (self.window.hidden) return;
     
-    CMAccelerometerData *data = self.motionManager.accelerometerData;
-    if (!data) return;
+    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
+    CGFloat angle = 0;
     
-    double x = data.acceleration.x;
-    double y = data.acceleration.y;
-    
-    CGFloat targetAngle = self.currentAngle;
-    
-    // 如果当前是竖屏状态
-    if (fabs(self.currentAngle) < 0.1) {
-        // 把阈值拉高到 0.93 (约倾斜 68 度以上才转)，必须非常用力地横过来才触发
-        if (x < -0.93) {
-            targetAngle = M_PI_2;
-        } else if (x > 0.93) {
-            targetAngle = -M_PI_2;
-        } else if (y > 0.93) {
-            targetAngle = M_PI;
-        }
-    } 
-    // 如果当前是横屏向左 (M_PI_2)
-    else if (self.currentAngle > 1.0) {
-        // 只有当你把手机放平，或者回正到差不多 24 度以内，才转回竖屏
-        if (x > -0.4) {
-            targetAngle = 0;
-        }
-    } 
-    // 如果当前是横屏向右 (-M_PI_2)
-    else if (self.currentAngle < -1.0) {
-        if (x < 0.4) {
-            targetAngle = 0;
-        }
-    }
-    // 倒置状态
-    else if (self.currentAngle > 3.0) {
-        if (y < 0.4) {
-            targetAngle = 0;
-        }
+    if (orientation == UIDeviceOrientationLandscapeLeft) {
+        angle = -M_PI_2;
+    } else if (orientation == UIDeviceOrientationLandscapeRight) {
+        angle = M_PI_2;
+    } else if (orientation == UIDeviceOrientationPortraitUpsideDown) {
+        angle = M_PI;
+    } else if (orientation == UIDeviceOrientationPortrait) {
+        angle = 0;
+    } else {
+        // FaceUp / FaceDown (平放桌面) 时保持当前角度不变
+        return;
     }
     
-    // 如果判定需要旋转，才执行动画
-    if (targetAngle != self.currentAngle) {
-        self.currentAngle = targetAngle;
-        [UIView animateWithDuration:0.3 animations:^{
-            self.titleLabel.transform = CGAffineTransformMakeRotation(targetAngle);
-        }];
-    }
+    // 平滑旋转文字
+    [UIView animateWithDuration:0.3 animations:^{
+        self.titleLabel.transform = CGAffineTransformMakeRotation(angle);
+    }];
 }
 
 - (void)updateTitle {
@@ -179,6 +155,9 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
+        if (visible) {
+            [self applyRotation]; // 显示时立即同步一次方向
+        }
     });
 }
 
