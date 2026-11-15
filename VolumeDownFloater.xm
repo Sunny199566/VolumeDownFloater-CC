@@ -71,6 +71,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) CGFloat lastSysAngle; 
+@property (nonatomic, assign) CGPoint lastTouchPoint; // 找回丢掉的拖动坐标属性
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; // 高级震动引擎
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
@@ -345,7 +346,7 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
-// 【终极长震逻辑】：用高级引擎直接拉满 0.5 秒 - 1 秒！
+// 【终极长震逻辑】：用高级引擎直接拉满 0.6 秒 - 1.5 秒！
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -383,7 +384,7 @@ void simulateVolumeDown(void) {
                 }
             }
         } else {
-            // 老机型兜底（没有高级马达就用原生短震凑合一下）
+            // 老机型兜底
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
             [gen prepare];
             [gen impactOccurred];
