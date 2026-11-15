@@ -124,12 +124,22 @@ void simulateVolumeDown(void) {
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 安全初始化高级震动引擎
+        // 【安全修复】：加入引擎防假死机制
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
                 self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
-                if (error) self.hapticEngine = nil;
+                if (!error) {
+                    __weak typeof(self) weakSelf = self;
+                    self.hapticEngine.resetHandler = ^{
+                        [weakSelf.hapticEngine startAndReturnError:nil];
+                    };
+                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+                        // 引擎被系统挂起时静默处理，下次点击重新 start
+                    };
+                } else {
+                    self.hapticEngine = nil;
+                }
             }
         }
 
@@ -180,9 +190,11 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 【优化一】：加入 tolerance（容差），让系统在后台低功耗时合并任务
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
-        self.orientationTimer.tolerance = 0.2;
+        // 【优化】：启动方向检测定时器（如果窗口未隐藏）
+        if (!self.window.hidden) {
+            self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+            self.orientationTimer.tolerance = 0.2;
+        }
         
         [self updateUI];
     });
@@ -193,7 +205,7 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
-    // 【优化二】：把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找（刺客一）
+    // 【优化】：把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -283,6 +295,7 @@ void simulateVolumeDown(void) {
     }
 }
 
+// 【优化】：重构定时器逻辑，防止滑块拖动时频繁重建定时器
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -322,15 +335,19 @@ void simulateVolumeDown(void) {
         
         NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
-        [self.timeTimer invalidate];
-        self.timeTimer = nil;
+        
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
-            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
-            self.timeTimer.tolerance = 0.5; // 【优化三】：时间刷新定时器也加入容差
+            // 只有当悬浮球显示着，且定时器不存在时，才创建
+            if (!self.window.hidden && !self.timeTimer) {
+                self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+                self.timeTimer.tolerance = 0.5;
+            }
         } else {
             self.timeBottomLabel.hidden = YES;
+            [self.timeTimer invalidate];
+            self.timeTimer = nil;
         }
         
         NSString *title = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -350,11 +367,29 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ | %d%%", timeStr, batteryPercent];
 }
 
+// 【核心优化】：隐藏悬浮球时彻底停掉所有定时器，真·0耗电
 - (void)setVisibility:(BOOL)visible {
-    dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.window.hidden = !visible;
+        
+        if (visible) {
+            // 显示时，重新启动定时器
+            if (!self.orientationTimer) {
+                self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+                self.orientationTimer.tolerance = 0.2;
+            }
+            [self updateUI]; // 触发一下时间定时器的启动
+        } else {
+            // 隐藏时，销毁所有定时器，彻底休眠
+            [self.orientationTimer invalidate];
+            self.orientationTimer = nil;
+            [self.timeTimer invalidate];
+            self.timeTimer = nil;
+        }
+    });
 }
 
-// 【保留原汁原味的高级震动引擎】：手感不变
+// 【保留原汁原味的高级震动引擎】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
