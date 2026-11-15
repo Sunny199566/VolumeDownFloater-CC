@@ -81,7 +81,7 @@ void simulateVolumeDown(void) {
 - (void)setVisibility:(BOOL)visible;
 - (void)updateUI;
 - (CGSize)getPortraitScreenSize;
-- (NSString *)getFrontmostBundleId;
+- (NSString *)getFrontAppBundleId;
 @end
 
 @implementation FloaterManager
@@ -98,29 +98,18 @@ void simulateVolumeDown(void) {
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
 }
 
-// 【终极获取前台包名】：直接从底层 ActiveWorkspace 抓，巨魔下100%有效
-- (NSString *)getFrontmostBundleId {
+// 【最底层的原生检测】：通过 UIScene 激活状态抓取，巨魔环境下100%有效
+- (NSString *)getFrontAppBundleId {
     @try {
-        // 方法 1：最底层、最准的 LSApplicationWorkspace
-        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
-        if (LSClass) {
-            id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
-            if (workspace && [workspace respondsToSelector:NSSelectorFromString(@"frontmostApplication")]) {
-                id appProxy = ((id (*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"frontmostApplication"));
-                if (appProxy && [appProxy respondsToSelector:NSSelectorFromString(@"bundleIdentifier")]) {
-                    return ((NSString *(*)(id, SEL))objc_msgSend)(appProxy, NSSelectorFromString(@"bundleIdentifier"));
-                }
-            }
-        }
-        
-        // 方法 2：SpringBoard 属性兜底
-        Class SBClass = NSClassFromString(@"SpringBoard");
-        if (SBClass) {
-            id sb = ((id (*)(id, SEL))objc_msgSend)(SBClass, NSSelectorFromString(@"sharedApplication"));
-            if (sb && [sb respondsToSelector:NSSelectorFromString(@"_frontmostApplication")]) {
-                id frontApp = ((id (*)(id, SEL))objc_msgSend)(sb, NSSelectorFromString(@"_frontmostApplication"));
-                if (frontApp && [frontApp respondsToSelector:NSSelectorFromString(@"bundleIdentifier")]) {
-                    return ((NSString *(*)(id, SEL))objc_msgSend)(frontApp, NSSelectorFromString(@"bundleIdentifier"));
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *ws = (UIWindowScene *)scene;
+                if (ws.activationState == UISceneActivationStateForegroundActive) {
+                    // 直接从 scene 读取私有 bundleId
+                    NSString *bundleId = [ws valueForKey:@"_bundleIdentifier"];
+                    if (bundleId) {
+                        return bundleId;
+                    }
                 }
             }
         }
@@ -223,7 +212,6 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 【核心优化】：改用 timerWithTimeInterval 并添加到 NSRunLoopCommonModes，保证后台滑屏也绝不挂起
         self.orientationTimer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         self.orientationTimer.tolerance = 0.2;
         [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
@@ -233,16 +221,17 @@ void simulateVolumeDown(void) {
 }
 
 - (void)checkAutoOrientation {
-    NSString *frontBundleId = [self getFrontmostBundleId];
+    NSString *frontBundleId = [self getFrontAppBundleId];
     
     if (frontBundleId) {
-        // 只要检测到包含 tencent.smfm (王者荣耀) 或 tencent.tmgp (和平精英等其他腾讯游戏)，都可以在这加
+        // 匹配王者荣耀包名
         if ([frontBundleId isEqualToString:@"com.tencent.smfm"]) {
             if (self.window.hidden) {
                 self.isAutoShowing = YES;
                 dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:YES]; });
             }
         } else {
+            // 退出了王者，或者去了别的 App
             if (!self.window.hidden && self.isAutoShowing) {
                 self.isAutoShowing = NO;
                 dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:NO]; });
