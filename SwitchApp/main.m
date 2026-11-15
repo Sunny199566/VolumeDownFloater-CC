@@ -1,5 +1,4 @@
 #import <UIKit/UIKit.h>
-#import <CoreHaptics/CoreHaptics.h>
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -13,7 +12,6 @@
 @property (strong, nonatomic) UISlider *alphaSlider;
 @property (strong, nonatomic) NSString *currentColor;
 @property (strong, nonatomic) NSMutableArray *colorButtons;
-@property (strong, nonatomic) CHHapticEngine *hapticEngine;
 @end
 
 @implementation AppDelegate
@@ -35,7 +33,7 @@
     headerLabel.textAlignment = NSTextAlignmentCenter;
     [scrollView addSubview:headerLabel];
 
-    // 1. 显示悬浮球 (核心修复：读取全局文件)
+    // 1. 显示悬浮球
     UILabel *switchLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 110, 200, 30)];
     switchLabel.text = @"显示悬浮球";
     switchLabel.font = [UIFont systemFontOfSize:18];
@@ -185,15 +183,6 @@
     [clearBtn addTarget:self action:@selector(clearImage) forControlEvents:UIControlEventTouchUpInside];
     [scrollView addSubview:clearBtn];
 
-    // 初始化 CoreHaptics 引擎
-    if (@available(iOS 13.0, *)) {
-        if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
-            NSError *error = nil;
-            self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
-            [self.hapticEngine startAndReturnError:&error];
-        }
-    }
-
     [self syncState:self.toggleSwitch.isOn];
     return YES;
 }
@@ -221,7 +210,6 @@
     [self triggerTestHaptic];
 }
 
-// 核心修复：开关状态写入全局文件
 - (void)switchChanged:(UISwitch *)sender {
     NSString *path = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
     [sender.isOn ? @"1" : @"0" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -247,12 +235,16 @@
     [self triggerTestHaptic];
 }
 
+// 【核心修复】：加上发通知逻辑，悬浮球立刻同步！
 - (void)hapticChanged:(UISlider *)sender {
     NSString *valStr = [NSString stringWithFormat:@"%f", self.hapticSlider.value];
     [valStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
     NSString *durStr = [NSString stringWithFormat:@"%f", self.durationSlider.value];
     [durStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
+    // 让悬浮球重新读取数值
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
     
     [self triggerTestHaptic];
 }
@@ -267,32 +259,33 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 测试高级震动
+// 【核心修复】：删除了耗电的高级震动引擎，用和悬浮球一致的省电循环法
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
         BOOL isCustom = [[NSUserDefaults standardUserDefaults] boolForKey:@"customHapticState"];
         
-        if (isCustom && CHHapticEngine.capabilitiesForHardware.supportsHaptics && self.hapticEngine) {
-            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:self.hapticSlider.value];
-            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5];
-            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensity, sharpness] relativeTime:0 duration:(self.durationSlider.value / 1000.0)];
-            
-            NSError *error = nil;
-            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-            if (!error) {
-                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) {
-                    [player startAtTime:0 error:&error];
-                }
-            }
-        } else {
+        if (isCustom) {
             UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
             if (self.hapticSlider.value < 0.3) style = UIImpactFeedbackStyleLight;
             else if (self.hapticSlider.value > 0.7) style = UIImpactFeedbackStyleHeavy;
             
-            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+            CGFloat durationSec = self.durationSlider.value / 1000.0;
+            if (durationSec <= 0.05) durationSec = 0.16;
+            
+            NSInteger ticks = (int)(durationSec / 0.06);
+            if (ticks < 1) ticks = 1;
+            
+            for (NSInteger i = 0; i < ticks; i++) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+                    [gen prepare];
+                    [gen impactOccurredWithIntensity:self.hapticSlider.value];
+                });
+            }
+        } else {
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
             [gen prepare];
-            [gen impactOccurredWithIntensity:self.hapticSlider.value];
+            [gen impactOccurred];
         }
     }
 }
