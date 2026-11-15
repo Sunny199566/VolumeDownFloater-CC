@@ -71,8 +71,8 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) CGFloat lastSysAngle; 
-@property (nonatomic, assign) CGPoint lastTouchPoint; // 找回丢掉的拖动坐标属性
-@property (strong, nonatomic) CHHapticEngine *hapticEngine; // 高级震动引擎
+@property (nonatomic, assign) CGPoint lastTouchPoint; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
 
@@ -180,7 +180,10 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
+        // 【优化一】：加入 tolerance（容差），让系统在后台低功耗时合并任务
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        self.orientationTimer.tolerance = 0.2;
+        
         [self updateUI];
     });
 }
@@ -190,26 +193,30 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
+    // 【优化二】：把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找（刺客一）
     static id cachedObserver = nil;
+    static SEL cachedActiveOrientation = nil;
+    static SEL cachedActiveInterfaceOrientation = nil;
+    
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
         if (FBSClass) {
             cachedObserver = [[FBSClass alloc] init];
+            cachedActiveOrientation = NSSelectorFromString(@"activeOrientation");
+            cachedActiveInterfaceOrientation = NSSelectorFromString(@"activeInterfaceOrientation");
         }
     });
     
-    if (cachedObserver) {
-        SEL sel = NSSelectorFromString(@"activeOrientation");
-        if ([cachedObserver respondsToSelector:sel]) {
-            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(cachedObserver, sel);
+    if (cachedObserver && cachedActiveOrientation) {
+        if ([cachedObserver respondsToSelector:cachedActiveOrientation]) {
+            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(cachedObserver, cachedActiveOrientation);
         }
     }
     
     if (sysOrientation == 1 || sysOrientation == 2) {
-        SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
-        if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
-            long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
+        if (cachedActiveInterfaceOrientation && [[UIApplication sharedApplication] respondsToSelector:cachedActiveInterfaceOrientation]) {
+            long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], cachedActiveInterfaceOrientation);
             if (activeOri >= 1 && activeOri <= 4) {
                 sysOrientation = activeOri;
             }
@@ -321,6 +328,7 @@ void simulateVolumeDown(void) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
             self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+            self.timeTimer.tolerance = 0.5; // 【优化三】：时间刷新定时器也加入容差
         } else {
             self.timeBottomLabel.hidden = YES;
         }
@@ -346,11 +354,10 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
-// 【终极长震逻辑】：用高级引擎直接拉满 0.6 秒 - 1.5 秒！
+// 【保留原汁原味的高级震动引擎】：手感不变
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
-    // 实时读取开关、强度和时长
     NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
     BOOL isCustom = [customStr isEqualToString:@"1"];
     
@@ -362,14 +369,11 @@ void simulateVolumeDown(void) {
     
     if (@available(iOS 13.0, *)) {
         if (self.hapticEngine) {
-            // 如果没开自定义，默认给 0.6 秒（600毫秒）的超长重击
-            // 如果开了自定义，就读取滑块的值（除以1000变成秒）
             CGFloat targetSec = isCustom ? (duration / 1000.0) : 0.6;
             if (targetSec < 0.1) targetSec = 0.5;
-            if (targetSec > 1.5) targetSec = 1.5; // 限制最长1.5秒，防止马达太烫
+            if (targetSec > 1.5) targetSec = 1.5; 
             
             NSError *error = nil;
-            // intensity控制强度，sharpness（锐度）设为 0.2，震感非常“肉”且低沉
             CHHapticEventParameter *intensityParam = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:intensity];
             CHHapticEventParameter *sharpnessParam = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.2];
             
@@ -377,14 +381,13 @@ void simulateVolumeDown(void) {
             CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
             
             if (!error) {
-                [self.hapticEngine startAndReturnError:nil]; // 唤醒引擎
+                [self.hapticEngine startAndReturnError:nil]; 
                 id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
                 if (!error) {
                     [player startAtTime:0 error:&error];
                 }
             }
         } else {
-            // 老机型兜底
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
             [gen prepare];
             [gen impactOccurred];
