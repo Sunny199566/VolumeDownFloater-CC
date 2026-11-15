@@ -128,8 +128,6 @@ void simulateVolumeDown(void) {
         self.lastOrientationState = -1;
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-        // 开启物理重力感应，这样不管游戏怎么锁定，都能读到真实方向
-        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -178,7 +176,8 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        // 0.5秒检测一次，既省电，进游戏后又立刻能响应
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
@@ -186,35 +185,49 @@ void simulateVolumeDown(void) {
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
-    // 使用最底层的物理重力感应，不受游戏锁定影响，且极低功耗
-    UIDeviceOrientation devOri = [[UIDevice currentDevice] orientation];
+    long long sysOrientation = 1; 
     
-    // 如果手机是平放的，不做处理，保持原样
-    if (devOri == UIDeviceOrientationFaceUp || 
-        devOri == UIDeviceOrientationFaceDown || 
-        devOri == UIDeviceOrientationUnknown) {
-        return; 
+    // 静态缓存，只创建一次，绝不耗电！
+    static id cachedObserver = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
+        if (FBSClass) {
+            cachedObserver = [[FBSClass alloc] init];
+        }
+    });
+    
+    if (cachedObserver) {
+        SEL sel = NSSelectorFromString(@"activeOrientation");
+        if ([cachedObserver respondsToSelector:sel]) {
+            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(cachedObserver, sel);
+        }
     }
     
-    // 1=竖屏, 2=横屏
+    // 如果获取到的不是标准方向（比如游戏未初始化），使用前台状态栏方向兜底
+    if (sysOrientation == 1 || sysOrientation == 2) {
+        SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
+        if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
+            long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
+            if (activeOri >= 1 && activeOri <= 4) {
+                sysOrientation = activeOri;
+            }
+        }
+    }
+    
+    // 3 = 横屏（Home键在右），4 = 横屏（Home键在左）
     NSInteger currentState = 1;
-    if (devOri == UIDeviceOrientationLandscapeLeft || devOri == UIDeviceOrientationLandscapeRight) {
-        currentState = 2;
-    }
+    if (sysOrientation == 3 || sysOrientation == 4) currentState = 2;
     
-    // 只有当物理方向发生“变化”时，才自动转！防止覆盖你长按手动转的角度
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
         CGFloat targetAngle = 0;
-        if (devOri == UIDeviceOrientationLandscapeLeft) {
-            targetAngle = -M_PI_2; 
-        } else if (devOri == UIDeviceOrientationLandscapeRight) {
-            targetAngle = M_PI_2;  
-        } else if (devOri == UIDeviceOrientationPortraitUpsideDown) {
-            targetAngle = M_PI;
-        } else {
-            targetAngle = 0;
+        // 完美修正旋转方向，让你看着绝对是正的
+        if (sysOrientation == 3) {
+            targetAngle = M_PI_2; 
+        } else if (sysOrientation == 4) {
+            targetAngle = -M_PI_2;
         }
         
         self.currentAngle = targetAngle;
