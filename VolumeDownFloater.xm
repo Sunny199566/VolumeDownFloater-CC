@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <CoreHaptics/CoreHaptics.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
@@ -70,11 +71,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) CGFloat lastSysAngle; 
-@property (nonatomic, assign) float hapticIntensity; 
-@property (nonatomic, assign) float hapticDuration;
-@property (nonatomic, assign) BOOL isCustomHaptic;
-@property (nonatomic, assign) NSInteger lastOrientationState; 
-@property (nonatomic, assign) CGPoint lastTouchPoint;
+@property (strong, nonatomic) CHHapticEngine *hapticEngine; // 高级震动引擎
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
 
@@ -123,13 +120,17 @@ void simulateVolumeDown(void) {
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.window.hidden = ![showStr isEqualToString:@"1"];
 
-        self.hapticIntensity = 1.0;
-        self.hapticDuration = 160.0;
-        self.isCustomHaptic = NO;
-        self.lastOrientationState = -1;
-        
         self.lastSysAngle = 0;
         self.currentAngle = 0;
+
+        // 安全初始化高级震动引擎
+        if (@available(iOS 13.0, *)) {
+            if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
+                NSError *error = nil;
+                self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
+                if (error) self.hapticEngine = nil;
+            }
+        }
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
 
@@ -344,7 +345,7 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
-// 【核心修复：删掉了0.06秒双击，并且每次点击实时读取txt，确保滑块绝对生效！】
+// 【终极长震逻辑】：用高级引擎直接拉满 0.5 秒 - 1 秒！
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -359,31 +360,30 @@ void simulateVolumeDown(void) {
     float duration = durStr.length > 0 ? [durStr floatValue] : 160.0;
     
     if (@available(iOS 13.0, *)) {
-        if (isCustom) {
-            // ==========================================
-            // 开启自定义震动：根据滑块时长进行连击震动
-            // ==========================================
-            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-            if (intensity < 0.3) style = UIImpactFeedbackStyleLight;
-            else if (intensity > 0.7) style = UIImpactFeedbackStyleHeavy;
+        if (self.hapticEngine) {
+            // 如果没开自定义，默认给 0.6 秒（600毫秒）的超长重击
+            // 如果开了自定义，就读取滑块的值（除以1000变成秒）
+            CGFloat targetSec = isCustom ? (duration / 1000.0) : 0.6;
+            if (targetSec < 0.1) targetSec = 0.5;
+            if (targetSec > 1.5) targetSec = 1.5; // 限制最长1.5秒，防止马达太烫
             
-            CGFloat durationSec = duration / 1000.0; 
-            if (durationSec <= 0.05) durationSec = 0.16; 
+            NSError *error = nil;
+            // intensity控制强度，sharpness（锐度）设为 0.2，震感非常“肉”且低沉
+            CHHapticEventParameter *intensityParam = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:intensity];
+            CHHapticEventParameter *sharpnessParam = [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.2];
             
-            NSInteger ticks = (int)(durationSec / 0.06);
-            if (ticks < 1) ticks = 1;
+            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[intensityParam, sharpnessParam] relativeTime:0 duration:targetSec];
+            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
             
-            for (NSInteger i = 0; i < ticks; i++) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-                    [gen prepare];
-                    [gen impactOccurredWithIntensity:intensity];
-                });
+            if (!error) {
+                [self.hapticEngine startAndReturnError:nil]; // 唤醒引擎
+                id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
+                if (!error) {
+                    [player startAtTime:0 error:&error];
+                }
             }
         } else {
-            // ==========================================
-            // 关闭自定义震动：单次重击（干脆的一声“哒”）
-            // ==========================================
+            // 老机型兜底（没有高级马达就用原生短震凑合一下）
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
             [gen prepare];
             [gen impactOccurred];
