@@ -182,7 +182,14 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:10];
+        
+        // 【修改点 1】：使用等宽数字字体
+        if (@available(iOS 9.0, *)) {
+            self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
+        } else {
+            self.timeBottomLabel.font = [UIFont boldSystemFontOfSize:10];
+        }
+        
         self.timeBottomLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
         self.timeBottomLabel.layer.cornerRadius = 5;
         self.timeBottomLabel.layer.masksToBounds = YES;
@@ -190,7 +197,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 【优化】：启动方向检测定时器（如果窗口未隐藏）
+        // 启动方向检测定时器（如果窗口未隐藏）
         if (!self.window.hidden) {
             self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
             self.orientationTimer.tolerance = 0.2;
@@ -205,7 +212,7 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
-    // 【优化】：把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
+    // 把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -295,7 +302,7 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 【优化】：重构定时器逻辑，防止滑块拖动时频繁重建定时器
+// 重构定时器逻辑，防止滑块拖动时频繁重建定时器
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -364,10 +371,12 @@ void simulateVolumeDown(void) {
     float batteryLevel = [[UIDevice currentDevice] batteryLevel];
     int batteryPercent = (int)(batteryLevel * 100);
     if (batteryPercent < 0) batteryPercent = 0;
-    self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ | %d%%", timeStr, batteryPercent];
+    
+    // 【修改点 2】：把竖线改成圆点
+    self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
-// 【核心优化】：隐藏悬浮球时彻底停掉所有定时器，真·0耗电
+// 隐藏悬浮球时彻底停掉所有定时器，真·0耗电
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
@@ -469,6 +478,7 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// --- 修复编译报错：先声明回调函数 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
