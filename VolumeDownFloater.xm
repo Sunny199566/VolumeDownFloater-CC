@@ -32,7 +32,6 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// 穿透窗口，防止遮挡桌面
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -75,6 +74,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (nonatomic, assign) BOOL isUserManualOn;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -119,12 +119,13 @@ void simulateVolumeDown(void) {
         
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
-        self.window.hidden = ![showStr isEqualToString:@"1"];
+        self.isUserManualOn = [showStr isEqualToString:@"1"];
+        // 初始状态：如果总开关开着，但不在王者里，也先隐藏。不过为了不闪烁，初始先根据总开关来。
+        self.window.hidden = !self.isUserManualOn;
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 【安全修复】：加入引擎防假死机制
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -133,9 +134,6 @@ void simulateVolumeDown(void) {
                     __weak typeof(self) weakSelf = self;
                     self.hapticEngine.resetHandler = ^{
                         [weakSelf.hapticEngine startAndReturnError:nil];
-                    };
-                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-                        // 引擎被系统挂起时静默处理，下次点击重新 start
                     };
                 } else {
                     self.hapticEngine = nil;
@@ -183,7 +181,6 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         
-        // 【修改点 1】：使用等宽数字字体
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
         } else {
@@ -197,22 +194,52 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 启动方向检测定时器（如果窗口未隐藏）
-        if (!self.window.hidden) {
-            self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
-            self.orientationTimer.tolerance = 0.2;
-        }
+        // 定时器必须常驻，为了检测是否进入王者
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        self.orientationTimer.tolerance = 0.2;
         
         [self updateUI];
     });
 }
 
 - (void)checkAutoOrientation {
-    if (self.window.hidden) return;
+    // ==========================================
+    // 核心新增：检测前台应用是不是王者荣耀
+    // ==========================================
+    BOOL isPlayingGame = NO;
+    Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
+    if (LSClass) {
+        id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
+        if (workspace) {
+            NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"activeApplications"));
+            if (activeApps.count > 0) {
+                id proxy = activeApps.firstObject;
+                NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, NSSelectorFromString(@"applicationIdentifier"));
+                // com.tencent.smfm 是王者荣耀的包名
+                if ([bundleId isEqualToString:@"com.tencent.smfm"]) {
+                    isPlayingGame = YES;
+                }
+            }
+        }
+    }
+
+    // 自动显隐逻辑：如果在游戏里，就显示。如果在别的地方，就隐藏（除非用户没在控制台打开总开关）
+    BOOL shouldShow = isPlayingGame && self.isUserManualOn;
     
+    // 如果当前状态和应该的状态不符，立刻切换
+    if (self.window.hidden == shouldShow) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self setVisibility:shouldShow];
+        });
+    }
+
+    if (self.window.hidden) return; // 如果隐藏了，就不用去管屏幕旋转了
+
+    // ==========================================
+    // 屏幕旋转检测逻辑（原封不动）
+    // ==========================================
     long long sysOrientation = 1; 
     
-    // 把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -302,9 +329,30 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 重构定时器逻辑，防止滑块拖动时频繁重建定时器
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+        NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
+        self.isUserManualOn = [showStr isEqualToString:@"1"];
+        // 更新总开关后，马上重新判断显隐
+        BOOL isPlayingGame = NO;
+        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
+        if (LSClass) {
+            id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
+            if (workspace) {
+                NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"activeApplications"));
+                if (activeApps.count > 0) {
+                    id proxy = activeApps.firstObject;
+                    NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, NSSelectorFromString(@"applicationIdentifier"));
+                    if ([bundleId isEqualToString:@"com.tencent.smfm"]) isPlayingGame = YES;
+                }
+            }
+        }
+        BOOL shouldShow = isPlayingGame && self.isUserManualOn;
+        if (self.window.hidden == shouldShow) {
+            self.window.hidden = !shouldShow;
+        }
+
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
         CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
         NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -346,7 +394,6 @@ void simulateVolumeDown(void) {
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
-            // 只有当悬浮球显示着，且定时器不存在时，才创建
             if (!self.window.hidden && !self.timeTimer) {
                 self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
                 self.timeTimer.tolerance = 0.5;
@@ -371,34 +418,29 @@ void simulateVolumeDown(void) {
     float batteryLevel = [[UIDevice currentDevice] batteryLevel];
     int batteryPercent = (int)(batteryLevel * 100);
     if (batteryPercent < 0) batteryPercent = 0;
-    
-    // 【修改点 2】：把竖线改成圆点
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
-// 隐藏悬浮球时彻底停掉所有定时器，真·0耗电
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
         if (visible) {
-            // 显示时，重新启动定时器
-            if (!self.orientationTimer) {
-                self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
-                self.orientationTimer.tolerance = 0.2;
+            // 显示时，如果需要时间，把时间定时器拉起来
+            NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
+            if ([timeStatus isEqualToString:@"1"] && !self.timeTimer) {
+                [self updateTimeText];
+                self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+                self.timeTimer.tolerance = 0.5;
             }
-            [self updateUI]; // 触发一下时间定时器的启动
         } else {
-            // 隐藏时，销毁所有定时器，彻底休眠
-            [self.orientationTimer invalidate];
-            self.orientationTimer = nil;
+            // 隐藏时，把时间定时器停掉（方向定时器不能停，要留着检测王者）
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
     });
 }
 
-// 【保留原汁原味的高级震动引擎】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -478,7 +520,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// --- 修复编译报错：先声明回调函数 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
