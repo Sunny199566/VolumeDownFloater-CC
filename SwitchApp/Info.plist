@@ -20,6 +20,23 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1.0</string>
+	
+	<!-- ========================================== -->
+	<!-- 新增：注册 URL 协议，让快捷指令能唤醒控制台 -->
+	<!-- ========================================== -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.yourname.volumefloater.url</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>volumefloater</string>
+			</array>
+		</dict>
+	</array>
+	<!-- ========================================== -->
+
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen</key>
