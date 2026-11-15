@@ -120,8 +120,8 @@ void simulateVolumeDown(void) {
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.isUserManualOn = [showStr isEqualToString:@"1"];
-        // 初始状态：如果总开关开着，但不在王者里，也先隐藏。不过为了不闪烁，初始先根据总开关来。
-        self.window.hidden = !self.isUserManualOn;
+        // 为了防止刚启动就崩溃，初始强制隐藏，等定时器检测到王者再显示
+        self.window.hidden = YES;
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
@@ -194,7 +194,6 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 定时器必须常驻，为了检测是否进入王者
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         self.orientationTimer.tolerance = 0.2;
         
@@ -202,42 +201,50 @@ void simulateVolumeDown(void) {
     });
 }
 
-- (void)checkAutoOrientation {
-    // ==========================================
-    // 核心新增：检测前台应用是不是王者荣耀
-    // ==========================================
-    BOOL isPlayingGame = NO;
-    Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
-    if (LSClass) {
+// ======= 新增的安全检测方法 =======
+- (BOOL)isPlayingTargetGame {
+    @try {
+        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
+        if (!LSClass) return NO;
+        
         id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
-        if (workspace) {
-            NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"activeApplications"));
-            if (activeApps.count > 0) {
+        if (!workspace) return NO;
+        
+        SEL activeAppsSel = NSSelectorFromString(@"activeApplications");
+        if ([workspace respondsToSelector:activeAppsSel]) {
+            NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, activeAppsSel);
+            if ([activeApps isKindOfClass:[NSArray class]] && activeApps.count > 0) {
                 id proxy = activeApps.firstObject;
-                NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, NSSelectorFromString(@"applicationIdentifier"));
-                // com.tencent.smfm 是王者荣耀的包名
-                if ([bundleId isEqualToString:@"com.tencent.smfm"]) {
-                    isPlayingGame = YES;
+                SEL bundleSel = NSSelectorFromString(@"applicationIdentifier");
+                if ([proxy respondsToSelector:bundleSel]) {
+                    NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, bundleSel);
+                    if ([bundleId isKindOfClass:[NSString class]]) {
+                        // 王者的包名
+                        if ([bundleId isEqualToString:@"com.tencent.smfm"]) {
+                            return YES;
+                        }
+                    }
                 }
             }
         }
+    } @catch (NSException *exception) {
+        // 吞掉异常，防止安全模式
     }
+    return NO;
+}
 
-    // 自动显隐逻辑：如果在游戏里，就显示。如果在别的地方，就隐藏（除非用户没在控制台打开总开关）
+- (void)checkAutoOrientation {
+    BOOL isPlayingGame = [self isPlayingTargetGame];
     BOOL shouldShow = isPlayingGame && self.isUserManualOn;
     
-    // 如果当前状态和应该的状态不符，立刻切换
     if (self.window.hidden == shouldShow) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self setVisibility:shouldShow];
         });
     }
 
-    if (self.window.hidden) return; // 如果隐藏了，就不用去管屏幕旋转了
+    if (self.window.hidden) return;
 
-    // ==========================================
-    // 屏幕旋转检测逻辑（原封不动）
-    // ==========================================
     long long sysOrientation = 1; 
     
     static id cachedObserver = nil;
@@ -334,20 +341,8 @@ void simulateVolumeDown(void) {
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.isUserManualOn = [showStr isEqualToString:@"1"];
-        // 更新总开关后，马上重新判断显隐
-        BOOL isPlayingGame = NO;
-        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
-        if (LSClass) {
-            id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
-            if (workspace) {
-                NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"activeApplications"));
-                if (activeApps.count > 0) {
-                    id proxy = activeApps.firstObject;
-                    NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, NSSelectorFromString(@"applicationIdentifier"));
-                    if ([bundleId isEqualToString:@"com.tencent.smfm"]) isPlayingGame = YES;
-                }
-            }
-        }
+        
+        BOOL isPlayingGame = [self isPlayingTargetGame];
         BOOL shouldShow = isPlayingGame && self.isUserManualOn;
         if (self.window.hidden == shouldShow) {
             self.window.hidden = !shouldShow;
@@ -426,7 +421,6 @@ void simulateVolumeDown(void) {
         self.window.hidden = !visible;
         
         if (visible) {
-            // 显示时，如果需要时间，把时间定时器拉起来
             NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
             if ([timeStatus isEqualToString:@"1"] && !self.timeTimer) {
                 [self updateTimeText];
@@ -434,7 +428,6 @@ void simulateVolumeDown(void) {
                 self.timeTimer.tolerance = 0.5;
             }
         } else {
-            // 隐藏时，把时间定时器停掉（方向定时器不能停，要留着检测王者）
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
