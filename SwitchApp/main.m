@@ -16,6 +16,42 @@
 
 @implementation AppDelegate
 
+// ==========================================
+// 【新增功能】：处理快捷指令传来的 URL
+// ==========================================
+- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    if ([url.scheme isEqualToString:@"volumefloater"]) {
+        if ([url.host isEqualToString:@"show"]) {
+            // 1. 写入配置文件，保证控制台 UI 状态同步
+            [@"1" writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            
+            // 2. 发送通知唤醒悬浮球
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/show"), NULL, NULL, YES);
+            
+            // 3. 瞬间闪退，不挡游戏画面
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                exit(0);
+            });
+            return YES;
+            
+        } else if ([url.host isEqualToString:@"hide"]) {
+            // 1. 写入配置文件
+            [@"0" writeToFile:@"/var/mobile/Library/Preferences/volumefloater_show.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            
+            // 2. 发送通知隐藏悬浮球
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/hide"), NULL, NULL, YES);
+            
+            // 3. 瞬间闪退
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                exit(0);
+            });
+            return YES;
+        }
+    }
+    return NO;
+}
+// ==========================================
+
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     UIViewController *vc = [[UIViewController alloc] init];
