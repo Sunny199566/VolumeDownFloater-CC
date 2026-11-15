@@ -69,11 +69,11 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) CGFloat lastSysAngle; // 新增：专门记录系统的真实角度
+@property (nonatomic, assign) CGFloat lastSysAngle; 
 @property (nonatomic, assign) float hapticIntensity; 
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
-@property (nonatomic, assign) NSInteger lastOrientationState; // 保留用作兼容
+@property (nonatomic, assign) NSInteger lastOrientationState; 
 @property (nonatomic, assign) CGPoint lastTouchPoint;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
@@ -128,7 +128,6 @@ void simulateVolumeDown(void) {
         self.isCustomHaptic = NO;
         self.lastOrientationState = -1;
         
-        // 初始化系统角度记录
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
@@ -189,7 +188,6 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
-    // 静态缓存，只创建一次，绝不耗电！
     static id cachedObserver = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -227,8 +225,6 @@ void simulateVolumeDown(void) {
         targetSysAngle = 0;
     }
     
-    // 【核心修复】：直接比对系统传来的真实角度！
-    // 只要系统从 3 变成 4 (即横屏左右颠倒)，目标角度就会变，从而触发旋转。
     if (fabs(targetSysAngle - self.lastSysAngle) > 0.1) {
         self.lastSysAngle = targetSysAngle;
         self.currentAngle = targetSysAngle;
@@ -264,7 +260,6 @@ void simulateVolumeDown(void) {
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
-        // 长按只改变手动角度，不改变 lastSysAngle，这样轮询就不会把它强行重置
         self.currentAngle += M_PI_2;
         if (self.currentAngle >= M_PI * 2) self.currentAngle -= M_PI * 2;
         
@@ -281,13 +276,6 @@ void simulateVolumeDown(void) {
 
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (hapticStr.length > 0) self.hapticIntensity = [hapticStr floatValue];
-        NSString *durStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" encoding:NSUTF8StringEncoding error:nil];
-        if (durStr.length > 0) self.hapticDuration = [durStr floatValue];
-        NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
-        self.isCustomHaptic = [customStr isEqualToString:@"1"];
-
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
         CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
         NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -356,22 +344,52 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
+// 【核心修复：删掉了0.06秒双击，并且每次点击实时读取txt，确保滑块绝对生效！】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
+    
+    // 实时读取开关、强度和时长
+    NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
+    BOOL isCustom = [customStr isEqualToString:@"1"];
+    
+    NSString *hapticStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" encoding:NSUTF8StringEncoding error:nil];
+    float intensity = hapticStr.length > 0 ? [hapticStr floatValue] : 1.0;
+    
+    NSString *durStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" encoding:NSUTF8StringEncoding error:nil];
+    float duration = durStr.length > 0 ? [durStr floatValue] : 160.0;
+    
     if (@available(iOS 13.0, *)) {
-        UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
-        if (self.hapticIntensity < 0.3) style = UIImpactFeedbackStyleLight;
-        else if (self.hapticIntensity > 0.7) style = UIImpactFeedbackStyleHeavy;
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-        [gen prepare];
-        [gen impactOccurredWithIntensity:self.hapticIntensity];
-        if (self.hapticIntensity >= 0.85) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                UIImpactFeedbackGenerator *gen2 = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-                [gen2 impactOccurred];
-            });
+        if (isCustom) {
+            // ==========================================
+            // 开启自定义震动：根据滑块时长进行连击震动
+            // ==========================================
+            UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+            if (intensity < 0.3) style = UIImpactFeedbackStyleLight;
+            else if (intensity > 0.7) style = UIImpactFeedbackStyleHeavy;
+            
+            CGFloat durationSec = duration / 1000.0; 
+            if (durationSec <= 0.05) durationSec = 0.16; 
+            
+            NSInteger ticks = (int)(durationSec / 0.06);
+            if (ticks < 1) ticks = 1;
+            
+            for (NSInteger i = 0; i < ticks; i++) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+                    [gen prepare];
+                    [gen impactOccurredWithIntensity:intensity];
+                });
+            }
+        } else {
+            // ==========================================
+            // 关闭自定义震动：单次重击（干脆的一声“哒”）
+            // ==========================================
+            UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+            [gen prepare];
+            [gen impactOccurred];
         }
     }
+    
     simulateVolumeDown();
 }
 
