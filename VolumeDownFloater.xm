@@ -93,7 +93,6 @@ void simulateVolumeDown(void) {
     return instance;
 }
 
-// 强制获取真实的物理竖屏宽高
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
@@ -129,6 +128,8 @@ void simulateVolumeDown(void) {
         self.lastOrientationState = -1;
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+        // 开启物理重力感应，这样不管游戏怎么锁定，都能读到真实方向
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
 
         self.mainContainer = [[UIView alloc] init];
         self.mainContainer.backgroundColor = [UIColor clearColor];
@@ -177,35 +178,45 @@ void simulateVolumeDown(void) {
         
         self.currentAngle = 0;
         
-        // 每秒检测一次方向，极低功耗
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
 
-// 极简方向判断：去掉了私有 API 和反射，直接用原生方法
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
-    // 获取当前屏幕方向
-    UIInterfaceOrientation currentOri = UIInterfaceOrientationPortrait;
-    if (@available(iOS 13.0, *)) {
-        UIWindowScene *scene = self.window.windowScene;
-        if (scene) currentOri = scene.interfaceOrientation;
-    } else {
-        currentOri = [[UIApplication sharedApplication] statusBarOrientation];
+    // 使用最底层的物理重力感应，不受游戏锁定影响，且极低功耗
+    UIDeviceOrientation devOri = [[UIDevice currentDevice] orientation];
+    
+    // 如果手机是平放的，不做处理，保持原样
+    if (devOri == UIDeviceOrientationFaceUp || 
+        devOri == UIDeviceOrientationFaceDown || 
+        devOri == UIDeviceOrientationUnknown) {
+        return; 
     }
     
-    // 竖屏就是 0 度，横屏就是 90度
-    CGFloat targetAngle = 0;
-    if (currentOri == UIInterfaceOrientationLandscapeLeft) {
-        targetAngle = M_PI_2;
-    } else if (currentOri == UIInterfaceOrientationLandscapeRight) {
-        targetAngle = -M_PI_2;
+    // 1=竖屏, 2=横屏
+    NSInteger currentState = 1;
+    if (devOri == UIDeviceOrientationLandscapeLeft || devOri == UIDeviceOrientationLandscapeRight) {
+        currentState = 2;
     }
     
-    // 如果角度发生了变化，才执行动画
-    if (fabs(targetAngle - self.currentAngle) > 0.1) {
+    // 只有当物理方向发生“变化”时，才自动转！防止覆盖你长按手动转的角度
+    if (currentState != self.lastOrientationState) {
+        self.lastOrientationState = currentState;
+        
+        CGFloat targetAngle = 0;
+        if (devOri == UIDeviceOrientationLandscapeLeft) {
+            targetAngle = -M_PI_2; 
+        } else if (devOri == UIDeviceOrientationLandscapeRight) {
+            targetAngle = M_PI_2;  
+        } else if (devOri == UIDeviceOrientationPortraitUpsideDown) {
+            targetAngle = M_PI;
+        } else {
+            targetAngle = 0;
+        }
+        
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
@@ -385,7 +396,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// --- C 函数前置声明 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
