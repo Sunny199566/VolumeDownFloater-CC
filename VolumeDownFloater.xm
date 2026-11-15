@@ -32,33 +32,6 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// ==========================================
-// 1. 必须先完整声明 FloaterManager 类
-// ==========================================
-@interface FloaterManager : NSObject
-@property (strong, nonatomic) UIWindow *window;
-@property (strong, nonatomic) UIView *mainContainer; 
-@property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel;       
-@property (strong, nonatomic) UILabel *timeBottomLabel;  
-@property (strong, nonatomic) UIImageView *bgImageView;
-@property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) CGFloat lastSysAngle; 
-@property (nonatomic, assign) CGPoint lastTouchPoint; 
-@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
-@property (strong, nonatomic) NSTimer *timeTimer;
-@property (strong, nonatomic) NSTimer *orientationTimer; 
-
-+ (instancetype)sharedInstance;
-- (void)setup;
-- (void)setVisibility:(BOOL)visible;
-- (void)updateUI;
-- (CGSize)getPortraitScreenSize;
-@end
-
-// ==========================================
-// 2. 基础视图定义
-// ==========================================
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -88,40 +61,29 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// ==========================================
-// 3. 核心拦截：接管系统的 openURL 方法
-// ==========================================
-static BOOL (*orig_openURL)(id, SEL, NSURL*);
-static BOOL my_openURL(id self, SEL _cmd, NSURL *url) {
-    if ([url.scheme isEqualToString:@"volumefloater"]) {
-        if ([url.host isEqualToString:@"show"]) {
-            [[FloaterManager sharedInstance] setVisibility:YES];
-            return YES;
-        } else if ([url.host isEqualToString:@"hide"]) {
-            [[FloaterManager sharedInstance] setVisibility:NO];
-            return YES;
-        }
-    }
-    return orig_openURL(self, _cmd, url);
-}
+@interface FloaterManager : NSObject
+@property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UIView *mainContainer; 
+@property (strong, nonatomic) UIButton *floatBtn;
+@property (strong, nonatomic) UILabel *titleLabel;       
+@property (strong, nonatomic) UILabel *timeBottomLabel;  
+@property (strong, nonatomic) UIImageView *bgImageView;
+@property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) CGFloat lastSysAngle; 
+@property (nonatomic, assign) CGPoint lastTouchPoint; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
+@property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (nonatomic, assign) BOOL isAutoShowing; // 标记是否由游戏自动唤起
 
-static BOOL (*orig_openURL_options)(id, SEL, NSURL*, NSDictionary*);
-static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *options) {
-    if ([url.scheme isEqualToString:@"volumefloater"]) {
-        if ([url.host isEqualToString:@"show"]) {
-            [[FloaterManager sharedInstance] setVisibility:YES];
-            return YES;
-        } else if ([url.host isEqualToString:@"hide"]) {
-            [[FloaterManager sharedInstance] setVisibility:NO];
-            return YES;
-        }
-    }
-    return orig_openURL_options(self, _cmd, url, options);
-}
++ (instancetype)sharedInstance;
+- (void)setup;
+- (void)setVisibility:(BOOL)visible;
+- (void)updateUI;
+- (CGSize)getPortraitScreenSize;
+- (NSString *)getFrontmostBundleId;
+@end
 
-// ==========================================
-// 4. FloaterManager 的具体实现
-// ==========================================
 @implementation FloaterManager
 
 + (instancetype)sharedInstance {
@@ -134,6 +96,23 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
+}
+
+// 安全的获取前台包名（防止安全模式）
+- (NSString *)getFrontmostBundleId {
+    @try {
+        Class SBClass = NSClassFromString(@"SpringBoard");
+        if (SBClass) {
+            id sb = ((id (*)(id, SEL))objc_msgSend)(SBClass, NSSelectorFromString(@"sharedApplication"));
+            if (sb && [sb respondsToSelector:NSSelectorFromString(@"_frontmostApplication")]) {
+                id frontApp = ((id (*)(id, SEL))objc_msgSend)(sb, NSSelectorFromString(@"_frontmostApplication"));
+                if (frontApp && [frontApp respondsToSelector:NSSelectorFromString(@"bundleIdentifier")]) {
+                    return ((NSString *(*)(id, SEL))objc_msgSend)(frontApp, NSSelectorFromString(@"bundleIdentifier"));
+                }
+            }
+        }
+    } @catch (NSException *e) {}
+    return nil;
 }
 
 - (void)setup {
@@ -159,6 +138,9 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.window.hidden = ![showStr isEqualToString:@"1"];
+        
+        // 如果用户手动开着的，标记不是自动
+        self.isAutoShowing = NO;
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
@@ -169,10 +151,7 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
                 self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
                 if (!error) {
                     __weak typeof(self) weakSelf = self;
-                    self.hapticEngine.resetHandler = ^{
-                        [weakSelf.hapticEngine startAndReturnError:nil];
-                    };
-                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {};
+                    self.hapticEngine.resetHandler = ^{ [weakSelf.hapticEngine startAndReturnError:nil]; };
                 } else {
                     self.hapticEngine = nil;
                 }
@@ -232,18 +211,36 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        if (!self.window.hidden) {
-            self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
-            self.orientationTimer.tolerance = 0.2;
-        }
+        // 定时器永不销毁，专门用来监听王者荣耀
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        self.orientationTimer.tolerance = 0.2;
         
         [self updateUI];
     });
 }
 
 - (void)checkAutoOrientation {
-    if (self.window.hidden) return;
+    // 【智能检测】只在进出游戏时干预
+    NSString *frontBundleId = [self getFrontmostBundleId];
     
+    if (frontBundleId) {
+        if ([frontBundleId isEqualToString:@"com.tencent.smfm"]) {
+            // 进了王者，且球没显示 -> 强制显示，标记为自动
+            if (self.window.hidden) {
+                self.isAutoShowing = YES;
+                dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:YES]; });
+            }
+        } else {
+            // 不在王者，且球显示着，并且是之前自动打开的 -> 自动关闭
+            if (!self.window.hidden && self.isAutoShowing) {
+                self.isAutoShowing = NO;
+                dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:NO]; });
+            }
+        }
+    }
+
+    if (self.window.hidden) return;
+
     long long sysOrientation = 1; 
     
     static id cachedObserver = nil;
@@ -410,6 +407,7 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
+        // 如果是手动通过控制台或通知打开的，标记为手动
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         [visible ? @"1" : @"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
         
@@ -420,8 +418,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
             }
             [self updateUI];
         } else {
-            [self.orientationTimer invalidate];
-            self.orientationTimer = nil;
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
@@ -507,38 +503,25 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
 }
 @end
 
-// ==========================================
-// 5. 回调函数与初始化
-// ==========================================
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
 __attribute__((constructor)) static void initFloater() {
-    // 注入 URL 拦截器
-    Method m1 = class_getInstanceMethod([UIApplication class], NSSelectorFromString(@"openURL:"));
-    if (m1) {
-        orig_openURL = (BOOL (*)(id, SEL, NSURL *))method_getImplementation(m1);
-        method_setImplementation(m1, (IMP)my_openURL);
-    }
-    Method m2 = class_getInstanceMethod([UIApplication class], NSSelectorFromString(@"openURL:options:completionHandler:"));
-    if (m2) {
-        orig_openURL_options = (BOOL (*)(id, SEL, NSURL *, NSDictionary *))method_getImplementation(m2);
-        method_setImplementation(m2, (IMP)my_openURL_options);
-    }
-
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    // 收到通知强制显示，并取消自动标记（因为是手动触发的）
+    [FloaterManager sharedInstance].isAutoShowing = NO;
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
 
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    [FloaterManager sharedInstance].isAutoShowing = NO;
     [[FloaterManager sharedInstance] setVisibility:NO];
 }
 
