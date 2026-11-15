@@ -31,6 +31,20 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
+// --- 核心修复：增加触摸穿透窗口 ---
+@interface PassThroughWindow : UIWindow
+@end
+@implementation PassThroughWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hitView = [super hitTest:point withEvent:event];
+    // 如果点中的是窗口本身（说明没有点在悬浮球上），返回 nil 让事件穿透到下层 App/SpringBoard
+    if (hitView == self) {
+        return nil; 
+    }
+    return hitView;
+}
+@end
+
 @interface PassThroughView : UIView
 @end
 @implementation PassThroughView
@@ -82,7 +96,7 @@ void simulateVolumeDown(void) {
     return instance;
 }
 
-// 核心修复：强制获取真实的物理竖屏宽高，无视系统当前的横屏状态
+// 强制获取真实的物理竖屏宽高，无视系统当前的横屏状态
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
@@ -95,10 +109,11 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
+        // 使用刚写的穿透 Window
         if (@available(iOS 13.0, *)) {
-            if (windowScene) { self.window = [[UIWindow alloc] initWithWindowScene:windowScene]; }
+            if (windowScene) { self.window = [[PassThroughWindow alloc] initWithWindowScene:windowScene]; }
         }
-        if (!self.window) { self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
+        if (!self.window) { self.window = [[PassThroughWindow alloc] initWithFrame:CGRectMake(0, 0, 2000, 2000)]; }
         
         self.window.frame = CGRectMake(0, 0, 2000, 2000);
         CGSize pSize = [self getPortraitScreenSize];
@@ -200,7 +215,6 @@ void simulateVolumeDown(void) {
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
-        // 修复：正负号对调，恢复你之前习惯的顺时针/逆时针方向
         CGFloat targetAngle = 0;
         if (sysOrientation == 3) targetAngle = M_PI_2; 
         else if (sysOrientation == 4) targetAngle = -M_PI_2;
