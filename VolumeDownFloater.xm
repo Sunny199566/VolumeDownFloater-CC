@@ -74,13 +74,14 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
-@property (nonatomic, assign) BOOL isUserManualOn;
+@property (nonatomic, copy) NSString *lastBundleId; // 记录上一个应用
 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateUI;
 - (CGSize)getPortraitScreenSize;
+- (NSString *)getFrontmostBundleId;
 @end
 
 @implementation FloaterManager
@@ -95,6 +96,39 @@ void simulateVolumeDown(void) {
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
+}
+
+- (NSString *)getFrontmostBundleId {
+    @try {
+        Class SBClass = NSClassFromString(@"SpringBoard");
+        if (SBClass) {
+            id sb = ((id (*)(id, SEL))objc_msgSend)(SBClass, NSSelectorFromString(@"sharedApplication"));
+            if (sb) {
+                if ([sb respondsToSelector:NSSelectorFromString(@"_frontmostApplication")]) {
+                    id frontApp = ((id (*)(id, SEL))objc_msgSend)(sb, NSSelectorFromString(@"_frontmostApplication"));
+                    if (frontApp && [frontApp respondsToSelector:NSSelectorFromString(@"bundleIdentifier")]) {
+                        return ((NSString *(*)(id, SEL))objc_msgSend)(frontApp, NSSelectorFromString(@"bundleIdentifier"));
+                    }
+                }
+            }
+        }
+        
+        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
+        if (LSClass) {
+            id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
+            if (workspace) {
+                NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"activeApplications"));
+                if ([activeApps isKindOfClass:[NSArray class]] && activeApps.count > 0) {
+                    id proxy = activeApps.firstObject;
+                    SEL bundleSel = NSSelectorFromString(@"applicationIdentifier");
+                    if ([proxy respondsToSelector:bundleSel]) {
+                        return ((NSString *(*)(id, SEL))objc_msgSend)(proxy, bundleSel);
+                    }
+                }
+            }
+        }
+    } @catch (NSException *exception) {}
+    return nil;
 }
 
 - (void)setup {
@@ -119,12 +153,11 @@ void simulateVolumeDown(void) {
         
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
-        self.isUserManualOn = [showStr isEqualToString:@"1"];
-        // 为了防止刚启动就崩溃，初始强制隐藏，等定时器检测到王者再显示
-        self.window.hidden = YES;
+        self.window.hidden = ![showStr isEqualToString:@"1"];
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
+        self.lastBundleId = @"";
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -201,50 +234,31 @@ void simulateVolumeDown(void) {
     });
 }
 
-// ======= 新增的安全检测方法 =======
-- (BOOL)isPlayingTargetGame {
-    @try {
-        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
-        if (!LSClass) return NO;
-        
-        id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
-        if (!workspace) return NO;
-        
-        SEL activeAppsSel = NSSelectorFromString(@"activeApplications");
-        if ([workspace respondsToSelector:activeAppsSel]) {
-            NSArray *activeApps = ((NSArray *(*)(id, SEL))objc_msgSend)(workspace, activeAppsSel);
-            if ([activeApps isKindOfClass:[NSArray class]] && activeApps.count > 0) {
-                id proxy = activeApps.firstObject;
-                SEL bundleSel = NSSelectorFromString(@"applicationIdentifier");
-                if ([proxy respondsToSelector:bundleSel]) {
-                    NSString *bundleId = ((NSString *(*)(id, SEL))objc_msgSend)(proxy, bundleSel);
-                    if ([bundleId isKindOfClass:[NSString class]]) {
-                        // 王者的包名
-                        if ([bundleId isEqualToString:@"com.tencent.smfm"]) {
-                            return YES;
-                        }
-                    }
-                }
-            }
-        }
-    } @catch (NSException *exception) {
-        // 吞掉异常，防止安全模式
-    }
-    return NO;
-}
-
 - (void)checkAutoOrientation {
-    BOOL isPlayingGame = [self isPlayingTargetGame];
-    BOOL shouldShow = isPlayingGame && self.isUserManualOn;
-    
-    if (self.window.hidden == shouldShow) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self setVisibility:shouldShow];
-        });
+    // 【智能边缘检测】：只在进出游戏的那一瞬间干预显隐
+    NSString *currentBundleId = [self getFrontmostBundleId];
+    if (currentBundleId) {
+        BOOL isPlayingGame = [currentBundleId isEqualToString:@"com.tencent.smfm"];
+        BOOL wasPlayingGame = [self.lastBundleId isEqualToString:@"com.tencent.smfm"];
+        
+        if (isPlayingGame && !wasPlayingGame) {
+            // 刚刚切进了王者：强制显示
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self setVisibility:YES];
+            });
+        } else if (!isPlayingGame && wasPlayingGame) {
+            // 刚刚切出了王者：强制隐藏
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self setVisibility:NO];
+            });
+        }
+        
+        self.lastBundleId = currentBundleId;
     }
 
     if (self.window.hidden) return;
 
+    // 以下是原有的方向检测逻辑
     long long sysOrientation = 1; 
     
     static id cachedObserver = nil;
@@ -336,18 +350,9 @@ void simulateVolumeDown(void) {
     }
 }
 
+// 这里的 updateUI 不再干预显示/隐藏，只负责更新样式
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
-        NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
-        self.isUserManualOn = [showStr isEqualToString:@"1"];
-        
-        BOOL isPlayingGame = [self isPlayingTargetGame];
-        BOOL shouldShow = isPlayingGame && self.isUserManualOn;
-        if (self.window.hidden == shouldShow) {
-            self.window.hidden = !shouldShow;
-        }
-
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
         CGFloat size = (sizeStr.length > 0) ? [sizeStr floatValue] : 60.0;
         NSString *alphaStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_alpha.txt" encoding:NSUTF8StringEncoding error:nil];
