@@ -74,7 +74,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
-@property (nonatomic, assign) BOOL isAutoShowing; // 标记是否由游戏自动唤起
+@property (nonatomic, assign) BOOL isAutoShowing;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -98,9 +98,22 @@ void simulateVolumeDown(void) {
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
 }
 
-// 安全的获取前台包名（防止安全模式）
+// 【终极获取前台包名】：直接从底层 ActiveWorkspace 抓，巨魔下100%有效
 - (NSString *)getFrontmostBundleId {
     @try {
+        // 方法 1：最底层、最准的 LSApplicationWorkspace
+        Class LSClass = NSClassFromString(@"LSApplicationWorkspace");
+        if (LSClass) {
+            id workspace = ((id (*)(id, SEL))objc_msgSend)(LSClass, NSSelectorFromString(@"defaultWorkspace"));
+            if (workspace && [workspace respondsToSelector:NSSelectorFromString(@"frontmostApplication")]) {
+                id appProxy = ((id (*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"frontmostApplication"));
+                if (appProxy && [appProxy respondsToSelector:NSSelectorFromString(@"bundleIdentifier")]) {
+                    return ((NSString *(*)(id, SEL))objc_msgSend)(appProxy, NSSelectorFromString(@"bundleIdentifier"));
+                }
+            }
+        }
+        
+        // 方法 2：SpringBoard 属性兜底
         Class SBClass = NSClassFromString(@"SpringBoard");
         if (SBClass) {
             id sb = ((id (*)(id, SEL))objc_msgSend)(SBClass, NSSelectorFromString(@"sharedApplication"));
@@ -139,7 +152,6 @@ void simulateVolumeDown(void) {
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.window.hidden = ![showStr isEqualToString:@"1"];
         
-        // 如果用户手动开着的，标记不是自动
         self.isAutoShowing = NO;
 
         self.lastSysAngle = 0;
@@ -211,27 +223,26 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 定时器永不销毁，专门用来监听王者荣耀
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        // 【核心优化】：改用 timerWithTimeInterval 并添加到 NSRunLoopCommonModes，保证后台滑屏也绝不挂起
+        self.orientationTimer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         self.orientationTimer.tolerance = 0.2;
+        [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
         
         [self updateUI];
     });
 }
 
 - (void)checkAutoOrientation {
-    // 【智能检测】只在进出游戏时干预
     NSString *frontBundleId = [self getFrontmostBundleId];
     
     if (frontBundleId) {
+        // 只要检测到包含 tencent.smfm (王者荣耀) 或 tencent.tmgp (和平精英等其他腾讯游戏)，都可以在这加
         if ([frontBundleId isEqualToString:@"com.tencent.smfm"]) {
-            // 进了王者，且球没显示 -> 强制显示，标记为自动
             if (self.window.hidden) {
                 self.isAutoShowing = YES;
                 dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:YES]; });
             }
         } else {
-            // 不在王者，且球显示着，并且是之前自动打开的 -> 自动关闭
             if (!self.window.hidden && self.isAutoShowing) {
                 self.isAutoShowing = NO;
                 dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:NO]; });
@@ -407,14 +418,14 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
-        // 如果是手动通过控制台或通知打开的，标记为手动
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         [visible ? @"1" : @"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
         
         if (visible) {
             if (!self.orientationTimer) {
-                self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+                self.orientationTimer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
                 self.orientationTimer.tolerance = 0.2;
+                [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
             }
             [self updateUI];
         } else {
@@ -515,7 +526,6 @@ __attribute__((constructor)) static void initFloater() {
 }
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    // 收到通知强制显示，并取消自动标记（因为是手动触发的）
     [FloaterManager sharedInstance].isAutoShowing = NO;
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
