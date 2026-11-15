@@ -33,47 +33,32 @@ void simulateVolumeDown(void) {
 }
 
 // ==========================================
-// 前置声明：只声明类和方法，避免重复定义
+// 1. 必须先完整声明 FloaterManager 类
 // ==========================================
-@class FloaterManager;
-@interface FloaterManager (URLHandler)
+@interface FloaterManager : NSObject
+@property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UIView *mainContainer; 
+@property (strong, nonatomic) UIButton *floatBtn;
+@property (strong, nonatomic) UILabel *titleLabel;       
+@property (strong, nonatomic) UILabel *timeBottomLabel;  
+@property (strong, nonatomic) UIImageView *bgImageView;
+@property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) CGFloat lastSysAngle; 
+@property (nonatomic, assign) CGPoint lastTouchPoint; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
+@property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) NSTimer *orientationTimer; 
+
 + (instancetype)sharedInstance;
+- (void)setup;
 - (void)setVisibility:(BOOL)visible;
+- (void)updateUI;
+- (CGSize)getPortraitScreenSize;
 @end
 
 // ==========================================
-// 核心拦截：接管系统的 openURL 方法
+// 2. 基础视图定义
 // ==========================================
-static BOOL (*orig_openURL)(id, SEL, NSURL*);
-static BOOL my_openURL(id self, SEL _cmd, NSURL *url) {
-    if ([url.scheme isEqualToString:@"volumefloater"]) {
-        if ([url.host isEqualToString:@"show"]) {
-            [[FloaterManager sharedInstance] setVisibility:YES];
-            return YES;
-        } else if ([url.host isEqualToString:@"hide"]) {
-            [[FloaterManager sharedInstance] setVisibility:NO];
-            return YES;
-        }
-    }
-    return orig_openURL(self, _cmd, url);
-}
-
-static BOOL (*orig_openURL_options)(id, SEL, NSURL*, NSDictionary*);
-static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *options) {
-    if ([url.scheme isEqualToString:@"volumefloater"]) {
-        if ([url.host isEqualToString:@"show"]) {
-            [[FloaterManager sharedInstance] setVisibility:YES];
-            return YES;
-        } else if ([url.host isEqualToString:@"hide"]) {
-            [[FloaterManager sharedInstance] setVisibility:NO];
-            return YES;
-        }
-    }
-    return orig_openURL_options(self, _cmd, url, options);
-}
-// ==========================================
-
-// 穿透窗口，防止遮挡桌面
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -103,27 +88,40 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
 }
 @end
 
-@interface FloaterManager : NSObject
-@property (strong, nonatomic) UIWindow *window;
-@property (strong, nonatomic) UIView *mainContainer; 
-@property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel;       
-@property (strong, nonatomic) UILabel *timeBottomLabel;  
-@property (strong, nonatomic) UIImageView *bgImageView;
-@property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) CGFloat lastSysAngle; 
-@property (nonatomic, assign) CGPoint lastTouchPoint; 
-@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
-@property (strong, nonatomic) NSTimer *timeTimer;
-@property (strong, nonatomic) NSTimer *orientationTimer; 
+// ==========================================
+// 3. 核心拦截：接管系统的 openURL 方法
+// ==========================================
+static BOOL (*orig_openURL)(id, SEL, NSURL*);
+static BOOL my_openURL(id self, SEL _cmd, NSURL *url) {
+    if ([url.scheme isEqualToString:@"volumefloater"]) {
+        if ([url.host isEqualToString:@"show"]) {
+            [[FloaterManager sharedInstance] setVisibility:YES];
+            return YES;
+        } else if ([url.host isEqualToString:@"hide"]) {
+            [[FloaterManager sharedInstance] setVisibility:NO];
+            return YES;
+        }
+    }
+    return orig_openURL(self, _cmd, url);
+}
 
-+ (instancetype)sharedInstance;
-- (void)setup;
-- (void)setVisibility:(BOOL)visible;
-- (void)updateUI;
-- (CGSize)getPortraitScreenSize;
-@end
+static BOOL (*orig_openURL_options)(id, SEL, NSURL*, NSDictionary*);
+static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *options) {
+    if ([url.scheme isEqualToString:@"volumefloater"]) {
+        if ([url.host isEqualToString:@"show"]) {
+            [[FloaterManager sharedInstance] setVisibility:YES];
+            return YES;
+        } else if ([url.host isEqualToString:@"hide"]) {
+            [[FloaterManager sharedInstance] setVisibility:NO];
+            return YES;
+        }
+    }
+    return orig_openURL_options(self, _cmd, url, options);
+}
 
+// ==========================================
+// 4. FloaterManager 的具体实现
+// ==========================================
 @implementation FloaterManager
 
 + (instancetype)sharedInstance {
@@ -165,7 +163,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 安全初始化高级震动引擎
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -510,7 +507,9 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
 }
 @end
 
-// --- 修复编译报错：先声明回调函数 ---
+// ==========================================
+// 5. 回调函数与初始化
+// ==========================================
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
