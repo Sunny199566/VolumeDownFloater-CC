@@ -200,9 +200,10 @@ void simulateVolumeDown(void) {
     if (currentState != self.lastOrientationState) {
         self.lastOrientationState = currentState;
         
+        // 修复：正负号对调，恢复你之前习惯的顺时针/逆时针方向
         CGFloat targetAngle = 0;
-        if (sysOrientation == 3) targetAngle = -M_PI_2; 
-        else if (sysOrientation == 4) targetAngle = M_PI_2;
+        if (sysOrientation == 3) targetAngle = M_PI_2; 
+        else if (sysOrientation == 4) targetAngle = -M_PI_2;
         
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
@@ -327,7 +328,6 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
-// 修复：之前漏了括号
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     if (@available(iOS 13.0, *)) {
@@ -384,7 +384,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// --- 修复编译报错：先声明回调函数 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
