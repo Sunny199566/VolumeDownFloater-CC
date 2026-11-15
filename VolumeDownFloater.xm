@@ -69,10 +69,11 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
 @property (strong, nonatomic) UIImageView *bgImageView;
 @property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) CGFloat lastSysAngle; // 新增：专门记录系统的真实角度
 @property (nonatomic, assign) float hapticIntensity; 
 @property (nonatomic, assign) float hapticDuration;
 @property (nonatomic, assign) BOOL isCustomHaptic;
-@property (nonatomic, assign) NSInteger lastOrientationState;
+@property (nonatomic, assign) NSInteger lastOrientationState; // 保留用作兼容
 @property (nonatomic, assign) CGPoint lastTouchPoint;
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
@@ -126,6 +127,10 @@ void simulateVolumeDown(void) {
         self.hapticDuration = 160.0;
         self.isCustomHaptic = NO;
         self.lastOrientationState = -1;
+        
+        // 初始化系统角度记录
+        self.lastSysAngle = 0;
+        self.currentAngle = 0;
 
         [UIDevice currentDevice].batteryMonitoringEnabled = YES;
 
@@ -174,9 +179,6 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        self.currentAngle = 0;
-        
-        // 0.5秒检测一次，既省电，进游戏后又立刻能响应
         self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
@@ -204,7 +206,6 @@ void simulateVolumeDown(void) {
         }
     }
     
-    // 如果获取到的不是标准方向（比如游戏未初始化），使用前台状态栏方向兜底
     if (sysOrientation == 1 || sysOrientation == 2) {
         SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
         if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
@@ -215,22 +216,23 @@ void simulateVolumeDown(void) {
         }
     }
     
-    // 3 = 横屏（Home键在右），4 = 横屏（Home键在左）
-    NSInteger currentState = 1;
-    if (sysOrientation == 3 || sysOrientation == 4) currentState = 2;
+    CGFloat targetSysAngle = 0;
+    if (sysOrientation == 3) {
+        targetSysAngle = M_PI_2; 
+    } else if (sysOrientation == 4) {
+        targetSysAngle = -M_PI_2;
+    } else if (sysOrientation == 2) {
+        targetSysAngle = M_PI;
+    } else {
+        targetSysAngle = 0;
+    }
     
-    if (currentState != self.lastOrientationState) {
-        self.lastOrientationState = currentState;
+    // 【核心修复】：直接比对系统传来的真实角度！
+    // 只要系统从 3 变成 4 (即横屏左右颠倒)，目标角度就会变，从而触发旋转。
+    if (fabs(targetSysAngle - self.lastSysAngle) > 0.1) {
+        self.lastSysAngle = targetSysAngle;
+        self.currentAngle = targetSysAngle;
         
-        CGFloat targetAngle = 0;
-        // 完美修正旋转方向，让你看着绝对是正的
-        if (sysOrientation == 3) {
-            targetAngle = M_PI_2; 
-        } else if (sysOrientation == 4) {
-            targetAngle = -M_PI_2;
-        }
-        
-        self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
         } completion:^(BOOL finished) {
@@ -262,6 +264,7 @@ void simulateVolumeDown(void) {
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
+        // 长按只改变手动角度，不改变 lastSysAngle，这样轮询就不会把它强行重置
         self.currentAngle += M_PI_2;
         if (self.currentAngle >= M_PI * 2) self.currentAngle -= M_PI * 2;
         
