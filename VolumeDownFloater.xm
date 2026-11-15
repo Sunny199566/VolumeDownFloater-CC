@@ -33,15 +33,16 @@ void simulateVolumeDown(void) {
 }
 
 // ==========================================
-// 【新增核心】：前置声明 FloaterManager
+// 前置声明：只声明类和方法，避免重复定义
 // ==========================================
-@interface FloaterManager : NSObject
+@class FloaterManager;
+@interface FloaterManager (URLHandler)
 + (instancetype)sharedInstance;
 - (void)setVisibility:(BOOL)visible;
 @end
 
 // ==========================================
-// 【新增核心】：拦截 openURL，实现快捷指令触发
+// 核心拦截：接管系统的 openURL 方法
 // ==========================================
 static BOOL (*orig_openURL)(id, SEL, NSURL*);
 static BOOL my_openURL(id self, SEL _cmd, NSURL *url) {
@@ -164,7 +165,7 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 【安全修复】：加入引擎防假死机制
+        // 安全初始化高级震动引擎
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -174,9 +175,7 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
                     self.hapticEngine.resetHandler = ^{
                         [weakSelf.hapticEngine startAndReturnError:nil];
                     };
-                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-                        // 引擎被系统挂起时静默处理，下次点击重新 start
-                    };
+                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {};
                 } else {
                     self.hapticEngine = nil;
                 }
@@ -223,7 +222,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         
-        // 【修改点 1】：使用等宽数字字体
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
         } else {
@@ -237,7 +235,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 启动方向检测定时器（如果窗口未隐藏）
         if (!self.window.hidden) {
             self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
             self.orientationTimer.tolerance = 0.2;
@@ -252,7 +249,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
     
     long long sysOrientation = 1; 
     
-    // 把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -342,7 +338,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
     }
 }
 
-// 重构定时器逻辑，防止滑块拖动时频繁重建定时器
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -386,7 +381,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
-            // 只有当悬浮球显示着，且定时器不存在时，才创建
             if (!self.window.hidden && !self.timeTimer) {
                 self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
                 self.timeTimer.tolerance = 0.5;
@@ -412,28 +406,23 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
     int batteryPercent = (int)(batteryLevel * 100);
     if (batteryPercent < 0) batteryPercent = 0;
     
-    // 【修改点 2】：把竖线改成圆点
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
-// 隐藏悬浮球时彻底停掉所有定时器，真·0耗电
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
-        // 【状态同步】：无论用快捷指令还是控制台，确保状态一致
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         [visible ? @"1" : @"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
         
         if (visible) {
-            // 显示时，重新启动定时器
             if (!self.orientationTimer) {
                 self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
                 self.orientationTimer.tolerance = 0.2;
             }
-            [self updateUI]; // 触发一下时间定时器的启动
+            [self updateUI];
         } else {
-            // 隐藏时，销毁所有定时器，彻底休眠
             [self.orientationTimer invalidate];
             self.orientationTimer = nil;
             [self.timeTimer invalidate];
@@ -442,7 +431,6 @@ static BOOL my_openURL_options(id self, SEL _cmd, NSURL *url, NSDictionary *opti
     });
 }
 
-// 【保留原汁原味的高级震动引擎】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -531,12 +519,12 @@ __attribute__((constructor)) static void initFloater() {
     // 注入 URL 拦截器
     Method m1 = class_getInstanceMethod([UIApplication class], NSSelectorFromString(@"openURL:"));
     if (m1) {
-        orig_openURL = (void *)method_getImplementation(m1);
+        orig_openURL = (BOOL (*)(id, SEL, NSURL *))method_getImplementation(m1);
         method_setImplementation(m1, (IMP)my_openURL);
     }
     Method m2 = class_getInstanceMethod([UIApplication class], NSSelectorFromString(@"openURL:options:completionHandler:"));
     if (m2) {
-        orig_openURL_options = (void *)method_getImplementation(m2);
+        orig_openURL_options = (BOOL (*)(id, SEL, NSURL *, NSDictionary *))method_getImplementation(m2);
         method_setImplementation(m2, (IMP)my_openURL_options);
     }
 
