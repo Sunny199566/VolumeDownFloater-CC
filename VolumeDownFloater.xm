@@ -31,16 +31,13 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// --- 核心修复：增加触摸穿透窗口 ---
+// 穿透窗口，防止遮挡桌面
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
-    // 如果点中的是窗口本身（说明没有点在悬浮球上），返回 nil 让事件穿透到下层 App/SpringBoard
-    if (hitView == self) {
-        return nil; 
-    }
+    if (hitView == self) return nil; 
     return hitView;
 }
 @end
@@ -96,7 +93,7 @@ void simulateVolumeDown(void) {
     return instance;
 }
 
-// 强制获取真实的物理竖屏宽高，无视系统当前的横屏状态
+// 强制获取真实的物理竖屏宽高
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
@@ -109,7 +106,6 @@ void simulateVolumeDown(void) {
             if ([scene isKindOfClass:[UIWindowScene class]]) { windowScene = (UIWindowScene *)scene; break; }
         }
         
-        // 使用刚写的穿透 Window
         if (@available(iOS 13.0, *)) {
             if (windowScene) { self.window = [[PassThroughWindow alloc] initWithWindowScene:windowScene]; }
         }
@@ -180,45 +176,36 @@ void simulateVolumeDown(void) {
         [self.mainContainer addSubview:self.timeBottomLabel];
         
         self.currentAngle = 0;
-        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+        
+        // 每秒检测一次方向，极低功耗
+        self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         [self updateUI];
     });
 }
 
+// 极简方向判断：去掉了私有 API 和反射，直接用原生方法
 - (void)checkAutoOrientation {
     if (self.window.hidden) return;
     
-    long long sysOrientation = 1; 
-    
-    Class FBSClass = NSClassFromString(@"FBSOrientationObserver");
-    if (FBSClass) {
-        id observer = [[FBSClass alloc] init];
-        SEL sel = NSSelectorFromString(@"activeOrientation");
-        if ([observer respondsToSelector:sel]) {
-            sysOrientation = ((long long (*)(id, SEL))objc_msgSend)(observer, sel);
-        }
+    // 获取当前屏幕方向
+    UIInterfaceOrientation currentOri = UIInterfaceOrientationPortrait;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.window.windowScene;
+        if (scene) currentOri = scene.interfaceOrientation;
+    } else {
+        currentOri = [[UIApplication sharedApplication] statusBarOrientation];
     }
     
-    if (sysOrientation == 1 || sysOrientation == 2) {
-        SEL activeSel = NSSelectorFromString(@"activeInterfaceOrientation");
-        if ([[UIApplication sharedApplication] respondsToSelector:activeSel]) {
-            long long activeOri = ((long long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], activeSel);
-            if (activeOri >= 1 && activeOri <= 4) {
-                sysOrientation = activeOri;
-            }
-        }
+    // 竖屏就是 0 度，横屏就是 90度
+    CGFloat targetAngle = 0;
+    if (currentOri == UIInterfaceOrientationLandscapeLeft) {
+        targetAngle = M_PI_2;
+    } else if (currentOri == UIInterfaceOrientationLandscapeRight) {
+        targetAngle = -M_PI_2;
     }
     
-    NSInteger currentState = 1;
-    if (sysOrientation == 3 || sysOrientation == 4) currentState = 2;
-    
-    if (currentState != self.lastOrientationState) {
-        self.lastOrientationState = currentState;
-        
-        CGFloat targetAngle = 0;
-        if (sysOrientation == 3) targetAngle = M_PI_2; 
-        else if (sysOrientation == 4) targetAngle = -M_PI_2;
-        
+    // 如果角度发生了变化，才执行动画
+    if (fabs(targetAngle - self.currentAngle) > 0.1) {
         self.currentAngle = targetAngle;
         [UIView animateWithDuration:0.3 animations:^{
             self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
@@ -398,6 +385,7 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// --- C 函数前置声明 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
