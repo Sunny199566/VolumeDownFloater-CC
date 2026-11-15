@@ -213,12 +213,10 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 核心修复：用物理竖屏尺寸限制边界
 - (void)clampCurrentPosition {
     CGSize screenSize = [self getPortraitScreenSize]; 
     
     BOOL isRotated = fabs(self.currentAngle) > 0.1;
-    // 旋转后，球在 Window（竖屏）坐标系里的包围盒宽高互换
     CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
     CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
     
@@ -329,7 +327,8 @@ void simulateVolumeDown(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ self.window.hidden = !visible; });
 }
 
--void handleTouchUpInside {
+// 修复：之前漏了括号
+- (void)handleTouchUpInside {
     if (self.window.hidden) return;
     if (@available(iOS 13.0, *)) {
         UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
@@ -360,7 +359,7 @@ void simulateVolumeDown(void) {
         CGPoint newCenter = CGPointMake(self.mainContainer.center.x + delta.x, self.mainContainer.center.y + delta.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 0.1;
-        CGSize screenSize = [self getPortraitScreenSize]; // 使用真实竖屏尺寸
+        CGSize screenSize = [self getPortraitScreenSize];
         
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
