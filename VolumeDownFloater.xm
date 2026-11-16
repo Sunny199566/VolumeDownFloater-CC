@@ -124,7 +124,7 @@ void simulateVolumeDown(void) {
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 【安全修复】：加入引擎防假死机制
+        // 引擎防假死机制
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -133,9 +133,6 @@ void simulateVolumeDown(void) {
                     __weak typeof(self) weakSelf = self;
                     self.hapticEngine.resetHandler = ^{
                         [weakSelf.hapticEngine startAndReturnError:nil];
-                    };
-                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-                        // 引擎被系统挂起时静默处理，下次点击重新 start
                     };
                 } else {
                     self.hapticEngine = nil;
@@ -183,7 +180,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         
-        // 【修改点 1】：使用等宽数字字体
+        // 使用等宽数字字体
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
         } else {
@@ -212,7 +209,6 @@ void simulateVolumeDown(void) {
     
     long long sysOrientation = 1; 
     
-    // 把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -285,20 +281,19 @@ void simulateVolumeDown(void) {
     self.mainContainer.center = c;
 }
 
+// 【核心修改】：长按隐藏悬浮球
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        [self.floatBtn cancelTrackingWithEvent:nil];
-        self.currentAngle += M_PI_2;
-        if (self.currentAngle >= M_PI * 2) self.currentAngle -= M_PI * 2;
-        
-        [UIView animateWithDuration:0.3 animations:^{
-            self.mainContainer.transform = CGAffineTransformMakeRotation(self.currentAngle);
-        } completion:^(BOOL finished) {
-            [self clampCurrentPosition];
-        }];
-        
+        // 1. 给个轻微震动反馈，提示隐藏成功
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
+        
+        // 2. 自动把配置文件里的状态改成“0”
+        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
+        [@"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        
+        // 3. 隐藏悬浮球并杀掉所有定时器
+        [self setVisibility:NO];
     }
 }
 
@@ -346,7 +341,7 @@ void simulateVolumeDown(void) {
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
-            // 只有当悬浮球显示着，且定时器不存在时，才创建
+            // 只有当悬浮球显示着，且定时器不存在时，才创建时间定时器
             if (!self.window.hidden && !self.timeTimer) {
                 self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
                 self.timeTimer.tolerance = 0.5;
@@ -372,7 +367,6 @@ void simulateVolumeDown(void) {
     int batteryPercent = (int)(batteryLevel * 100);
     if (batteryPercent < 0) batteryPercent = 0;
     
-    // 【修改点 2】：把竖线改成圆点
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
