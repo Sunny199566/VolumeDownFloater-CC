@@ -8,52 +8,56 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Theos
+      run: |
+        brew install ldid dpkg
+        export THEOS="${{ github.workspace }}/theos"
+        echo "THEOS=$THEOS" >> $GITHUB_ENV
+        echo "$THEOS/bin" >> $GITHUB_PATH
+        git clone --recursive https://github.com/theos/theos.git $THEOS
+        rm -rf $THEOS/sdks
+        git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
 
-      - name: Setup Theos
-        run: |
-          brew install ldid dpkg
-          export THEOS="${{ github.workspace }}/theos"
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-          echo "$THEOS/bin" >> $GITHUB_PATH
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          rm -rf $THEOS/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+    - name: Compile Tweak (Deb)
+      run: |
+        make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
 
-      - name: Compile Tweak (Deb)
-        run: |
-          make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
+    - name: Compile Switch App (IPA)
+      run: |
+        cd SwitchApp
+        make clean
+        make
+        make stage
+        mkdir -p Payload
+        
+        # 复制 Theos 组装好的 .app 文件夹
+        cp -R .theos/_/Applications/VolumeSwitch.app Payload/
+        
+        # 双保险：强制覆盖一次 Info.plist，确保绝对存在
+        cp Info.plist Payload/VolumeSwitch.app/Info.plist
+        
+        # 仅添加这一行：复制自定义的 App 图标
+        cp AppIcon.png Payload/VolumeSwitch.app/AppIcon.png
+        
+        # 赋予执行权限
+        chmod +x Payload/VolumeSwitch.app/VolumeSwitch
+        
+        # 打包成最终 IPA
+        zip -r VolumeSwitch.ipa Payload
 
-      - name: Compile Switch App (IPA)
-        run: |
-          cd SwitchApp
-          make clean
-          make
-          make stage
-          
-          mkdir -p Payload
-          # 复制 Theos 组装好的 .app 文件夹
-          cp -R .theos/_/Applications/VolumeSwitch.app Payload/
-          
-          # 双保险：强制覆盖一次 Info.plist，确保绝对存在
-          cp Info.plist Payload/VolumeSwitch.app/Info.plist
-          
-          # 赋予执行权限
-          chmod +x Payload/VolumeSwitch.app/VolumeSwitch
-          
-          # 打包成最终 IPA
-          zip -r VolumeSwitch.ipa Payload
+    - name: Upload Deb
+      uses: actions/upload-artifact@v4
+      with:
+        name: VolumeDown-Deb
+        path: packages/*.deb
 
-      - name: Upload Deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: VolumeDown-Deb
-          path: packages/*.deb
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: VolumeSwitch-IPA
-          path: SwitchApp/VolumeSwitch.ipa
+    - name: Upload IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: VolumeSwitch-IPA
+        path: SwitchApp/VolumeSwitch.ipa
