@@ -124,7 +124,6 @@ void simulateVolumeDown(void) {
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
-        // 引擎防假死机制
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
@@ -153,12 +152,10 @@ void simulateVolumeDown(void) {
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
-        // 1. 悬浮球拖拽
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         panGesture.cancelsTouchesInView = NO; 
         [self.floatBtn addGestureRecognizer:panGesture];
         
-        // 2. 悬浮球长按（折叠）
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.4; 
         longPress.allowableMovement = 15; 
@@ -181,7 +178,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeBottomLabel.userInteractionEnabled = YES; // 允许交互，才能长按唤醒
+        self.timeBottomLabel.userInteractionEnabled = YES; 
         
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
@@ -195,12 +192,10 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.hidden = YES;
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         
-        // 3. 时间条拖拽
         UIPanGestureRecognizer *timeLabelPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         timeLabelPan.cancelsTouchesInView = NO;
         [self.timeBottomLabel addGestureRecognizer:timeLabelPan];
         
-        // 4. 时间条长按（展开）
         UILongPressGestureRecognizer *timeLabelLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleTimeLabelLongPress:)];
         timeLabelLongPress.minimumPressDuration = 0.4;
         [self.timeBottomLabel addGestureRecognizer:timeLabelLongPress];
@@ -273,23 +268,50 @@ void simulateVolumeDown(void) {
     }
 }
 
+// 【核心修复】：动态边缘限制
 - (void)clampCurrentPosition {
     CGSize screenSize = [self getPortraitScreenSize]; 
-    
     BOOL isRotated = fabs(self.currentAngle) > 0.1;
-    CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
-    CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
-    
-    CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
-    
-    CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
-    CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
-    CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
-    CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
+    BOOL isCollapsed = self.floatBtn.hidden;
     
     CGPoint c = self.mainContainer.center;
-    c.x = MAX(minX, MIN(c.x, maxX));
-    c.y = MAX(minY, MIN(c.y, maxY));
+    CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
+    
+    if (isCollapsed) {
+        // 隐藏状态：只计算时间条的边界，允许拖到极限边缘
+        CGFloat size = self.mainContainer.bounds.size.width;
+        CGFloat labelW = isRotated ? 20 : size;
+        CGFloat labelH = isRotated ? size : 20;
+        
+        CGPoint offset = CGPointMake(0, size/2 - 0.5);
+        CGPoint rotatedOffset = CGPointApplyAffineTransform(offset, CGAffineTransformMakeRotation(self.currentAngle));
+        
+        CGFloat labelCenterX = c.x + rotatedOffset.x;
+        CGFloat labelCenterY = c.y + rotatedOffset.y;
+        
+        CGFloat minLabelX = centerX - screenSize.width / 2.0 + labelW / 2.0 + margin;
+        CGFloat maxLabelX = centerX + screenSize.width / 2.0 - labelW / 2.0 - margin;
+        CGFloat minLabelY = centerY - screenSize.height / 2.0 + labelH / 2.0 + margin;
+        CGFloat maxLabelY = centerY + screenSize.height / 2.0 - labelH / 2.0 - margin;
+        
+        labelCenterX = MAX(minLabelX, MIN(labelCenterX, maxLabelX));
+        labelCenterY = MAX(minLabelY, MIN(labelCenterY, maxLabelY));
+        
+        c.x = labelCenterX - rotatedOffset.x;
+        c.y = labelCenterY - rotatedOffset.y;
+    } else {
+        // 正常状态：计算球的边界
+        CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
+        CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
+        
+        CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
+        CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
+        CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
+        CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
+        
+        c.x = MAX(minX, MIN(c.x, maxX));
+        c.y = MAX(minY, MIN(c.y, maxY));
+    }
     self.mainContainer.center = c;
 }
 
@@ -299,17 +321,17 @@ void simulateVolumeDown(void) {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
         
-        // 1. 球隐藏
         self.floatBtn.hidden = YES;
-        // 2. 强制保留时间作为唤醒锚点
         self.timeBottomLabel.hidden = NO; 
         
-        // 3. 确保时间定时器在运转
         if (!self.timeTimer) {
             [self updateTimeText];
             self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
             self.timeTimer.tolerance = 0.5;
         }
+        
+        // 切换为折叠状态后，重新计算边界，防止时间条出界
+        [self clampCurrentPosition];
     }
 }
 
@@ -319,16 +341,17 @@ void simulateVolumeDown(void) {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
         
-        // 1. 球显示
         self.floatBtn.hidden = NO;
         
-        // 2. 恢复时间条的控制台设置
         NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
         if (![timeStatus isEqualToString:@"1"]) {
             self.timeBottomLabel.hidden = YES;
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
+        
+        // 展开球后，重新计算边界，确保球被拉回屏幕内
+        [self clampCurrentPosition];
     }
 }
 
@@ -374,10 +397,8 @@ void simulateVolumeDown(void) {
         BOOL isCollapsed = self.floatBtn.hidden;
         
         if (isCollapsed) {
-            // 折叠状态：无条件保留时间
             self.timeBottomLabel.hidden = NO;
         } else {
-            // 展开状态：根据控制台设置
             self.timeBottomLabel.hidden = !showTime;
         }
         
@@ -408,13 +429,12 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
-// 彻底隐藏悬浮球（控制台关闭）
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
         if (visible) {
-            self.floatBtn.hidden = NO; // 唤醒时强制展开
+            self.floatBtn.hidden = NO; 
             if (!self.orientationTimer) {
                 self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
                 self.orientationTimer.tolerance = 0.2;
@@ -471,6 +491,7 @@ void simulateVolumeDown(void) {
     simulateVolumeDown();
 }
 
+// 【核心修复】：拖拽时动态计算边界
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -483,20 +504,43 @@ void simulateVolumeDown(void) {
         CGPoint newCenter = CGPointMake(self.mainContainer.center.x + delta.x, self.mainContainer.center.y + delta.y);
         
         BOOL isRotated = fabs(self.currentAngle) > 0.1;
+        BOOL isCollapsed = self.floatBtn.hidden;
         CGSize screenSize = [self getPortraitScreenSize];
-        
-        CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
-        CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
-        
         CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
         
-        CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
-        CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
-        CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
-        CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
-        
-        newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
-        newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+        if (isCollapsed) {
+            CGFloat size = self.mainContainer.bounds.size.width;
+            CGFloat labelW = isRotated ? 20 : size;
+            CGFloat labelH = isRotated ? size : 20;
+            
+            CGPoint offset = CGPointMake(0, size/2 - 0.5);
+            CGPoint rotatedOffset = CGPointApplyAffineTransform(offset, CGAffineTransformMakeRotation(self.currentAngle));
+            
+            CGFloat labelCenterX = newCenter.x + rotatedOffset.x;
+            CGFloat labelCenterY = newCenter.y + rotatedOffset.y;
+            
+            CGFloat minLabelX = centerX - screenSize.width / 2.0 + labelW / 2.0 + margin;
+            CGFloat maxLabelX = centerX + screenSize.width / 2.0 - labelW / 2.0 - margin;
+            CGFloat minLabelY = centerY - screenSize.height / 2.0 + labelH / 2.0 + margin;
+            CGFloat maxLabelY = centerY + screenSize.height / 2.0 - labelH / 2.0 - margin;
+            
+            labelCenterX = MAX(minLabelX, MIN(labelCenterX, maxLabelX));
+            labelCenterY = MAX(minLabelY, MIN(labelCenterY, maxLabelY));
+            
+            newCenter.x = labelCenterX - rotatedOffset.x;
+            newCenter.y = labelCenterY - rotatedOffset.y;
+        } else {
+            CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
+            CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
+            
+            CGFloat minX = centerX - screenSize.width / 2.0 + ballW / 2.0 + margin;
+            CGFloat maxX = centerX + screenSize.width / 2.0 - ballW / 2.0 - margin;
+            CGFloat minY = centerY - screenSize.height / 2.0 + ballH / 2.0 + margin;
+            CGFloat maxY = centerY + screenSize.height / 2.0 - ballH / 2.0 - margin;
+            
+            newCenter.x = MAX(minX, MIN(newCenter.x, maxX));
+            newCenter.y = MAX(minY, MIN(newCenter.y, maxY));
+        }
         
         self.mainContainer.center = newCenter;
     } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
