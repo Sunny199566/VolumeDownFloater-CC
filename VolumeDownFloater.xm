@@ -192,7 +192,6 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 方向定时器，用于旋转
         self.orientationTimer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
         self.orientationTimer.tolerance = 0.2;
         [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
@@ -201,15 +200,13 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 当底层拦截到 App 切换时，会调用这个方法
 - (void)handleAppChange:(NSString *)bundleId {
-    if ([bundleId isEqualToString:@"com.tencent.smfm"]) { // 王者荣耀
+    if ([bundleId isEqualToString:@"com.tencent.smfm"]) {
         if (self.window.hidden) {
-            self.isAutoShowing = YES; // 标记为自动唤起
+            self.isAutoShowing = YES;
             dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:YES]; });
         }
     } else {
-        // 切到了别的 App，如果之前是自动唤起的，就自动隐藏
         if (!self.window.hidden && self.isAutoShowing) {
             self.isAutoShowing = NO;
             dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:NO]; });
@@ -511,7 +508,8 @@ __attribute__((constructor)) static void initFloater() {
     if (SBClass) {
         Method m = class_getInstanceMethod(SBClass, NSSelectorFromString(@"_setFrontmostApplication:"));
         if (m) {
-            orig_setFrontmostApplication = (void *)method_getImplementation(m);
+            // 【修复点】：强制将 method_getImplementation 转为函数指针类型
+            orig_setFrontmostApplication = (void (*)(id, SEL, id))method_getImplementation(m);
             method_setImplementation(m, (IMP)my_setFrontmostApplication);
         }
     }
@@ -523,7 +521,7 @@ __attribute__((constructor)) static void initFloater() {
 }
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [FloaterManager sharedInstance].isAutoShowing = NO; // 被外部手动唤醒，取消自动标记
+    [FloaterManager sharedInstance].isAutoShowing = NO;
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
 
