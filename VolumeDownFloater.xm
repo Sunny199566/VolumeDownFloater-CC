@@ -32,6 +32,7 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
+// 穿透窗口，防止遮挡桌面
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -74,8 +75,6 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
-@property (nonatomic, assign) BOOL isAutoShowing;
-@property (nonatomic, assign) BOOL isUserForcedOn;
 
 + (instancetype)sharedInstance;
 - (void)setup;
@@ -96,21 +95,6 @@ void simulateVolumeDown(void) {
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
-}
-
-// 【修复点】：使用 dlsym 动态获取底层 C 函数，解决链接报错
-- (NSString *)getFrontApp {
-    static NSString* (*SBFrontmostApplicationDisplayIdentifier)(void) = NULL;
-    if (!SBFrontmostApplicationDisplayIdentifier) {
-        SBFrontmostApplicationDisplayIdentifier = (NSString* (*)(void))dlsym(RTLD_DEFAULT, "SBFrontmostApplicationDisplayIdentifier");
-    }
-    
-    @try {
-        if (SBFrontmostApplicationDisplayIdentifier) {
-            return SBFrontmostApplicationDisplayIdentifier();
-        }
-    } @catch (NSException *e) {}
-    return nil;
 }
 
 - (void)setup {
@@ -136,20 +120,23 @@ void simulateVolumeDown(void) {
         NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
         NSString *showStr = [NSString stringWithContentsOfFile:showPath encoding:NSUTF8StringEncoding error:nil];
         self.window.hidden = ![showStr isEqualToString:@"1"];
-        
-        self.isUserForcedOn = !self.window.hidden;
-        self.isAutoShowing = NO;
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
 
+        // 【安全修复】：加入引擎防假死机制
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
                 NSError *error = nil;
                 self.hapticEngine = [[CHHapticEngine alloc] initAndReturnError:&error];
                 if (!error) {
                     __weak typeof(self) weakSelf = self;
-                    self.hapticEngine.resetHandler = ^{ [weakSelf.hapticEngine startAndReturnError:nil]; };
+                    self.hapticEngine.resetHandler = ^{
+                        [weakSelf.hapticEngine startAndReturnError:nil];
+                    };
+                    self.hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+                        // 引擎被系统挂起时静默处理，下次点击重新 start
+                    };
                 } else {
                     self.hapticEngine = nil;
                 }
@@ -196,6 +183,7 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
         
+        // 【修改点 1】：使用等宽数字字体
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
         } else {
@@ -209,38 +197,22 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 每秒检测一次
-        self.orientationTimer = [NSTimer timerWithTimeInterval:1.0 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
-        self.orientationTimer.tolerance = 0.2;
-        [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
+        // 启动方向检测定时器（如果窗口未隐藏）
+        if (!self.window.hidden) {
+            self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+            self.orientationTimer.tolerance = 0.2;
+        }
         
         [self updateUI];
     });
 }
 
 - (void)checkAutoOrientation {
-    NSString *frontApp = [self getFrontApp];
-    
-    if (frontApp) {
-        // 如果前台是王者荣耀
-        if ([frontApp isEqualToString:@"com.tencent.smfm"]) {
-            if (self.window.hidden && !self.isUserForcedOn) {
-                self.isAutoShowing = YES;
-                dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:YES]; });
-            }
-        } else {
-            // 如果前台变成了其他 App，且当前是自动显示的，就隐藏
-            if (!self.window.hidden && self.isAutoShowing) {
-                self.isAutoShowing = NO;
-                dispatch_async(dispatch_get_main_queue(), ^{ [self setVisibility:NO]; });
-            }
-        }
-    }
-
     if (self.window.hidden) return;
-
+    
     long long sysOrientation = 1; 
     
+    // 把 SEL 也进行静态缓存，彻底干掉每 0.5 秒的字符串查找
     static id cachedObserver = nil;
     static SEL cachedActiveOrientation = nil;
     static SEL cachedActiveInterfaceOrientation = nil;
@@ -330,6 +302,7 @@ void simulateVolumeDown(void) {
     }
 }
 
+// 重构定时器逻辑，防止滑块拖动时频繁重建定时器
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -373,7 +346,7 @@ void simulateVolumeDown(void) {
         if (showTime) {
             self.timeBottomLabel.hidden = NO;
             [self updateTimeText];
-            // 【核心逻辑】：只有当悬浮球显示着，且定时器不存在时，才创建时间定时器
+            // 只有当悬浮球显示着，且定时器不存在时，才创建
             if (!self.window.hidden && !self.timeTimer) {
                 self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
                 self.timeTimer.tolerance = 0.5;
@@ -399,32 +372,33 @@ void simulateVolumeDown(void) {
     int batteryPercent = (int)(batteryLevel * 100);
     if (batteryPercent < 0) batteryPercent = 0;
     
+    // 【修改点 2】：把竖线改成圆点
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
+// 隐藏悬浮球时彻底停掉所有定时器，真·0耗电
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
-        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
-        [visible ? @"1" : @"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        
         if (visible) {
+            // 显示时，重新启动定时器
             if (!self.orientationTimer) {
-                self.orientationTimer = [NSTimer timerWithTimeInterval:1.0 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
+                self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
                 self.orientationTimer.tolerance = 0.2;
-                [[NSRunLoop mainRunLoop] addTimer:self.orientationTimer forMode:NSRunLoopCommonModes];
             }
-            // 显示时，让 updateUI 决定是否创建时间定时器
-            [self updateUI];
+            [self updateUI]; // 触发一下时间定时器的启动
         } else {
-            // 【核心逻辑】：彻底关闭悬浮球时，强行杀掉时间刷新定时器，绝对不偷跑
+            // 隐藏时，销毁所有定时器，彻底休眠
+            [self.orientationTimer invalidate];
+            self.orientationTimer = nil;
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
     });
 }
 
+// 【保留原汁原味的高级震动引擎】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -504,6 +478,7 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// --- 修复编译报错：先声明回调函数 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
@@ -516,14 +491,10 @@ __attribute__((constructor)) static void initFloater() {
 }
 
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [FloaterManager sharedInstance].isAutoShowing = NO;
-    [FloaterManager sharedInstance].isUserForcedOn = YES; 
     [[FloaterManager sharedInstance] setVisibility:YES];
 }
 
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [FloaterManager sharedInstance].isAutoShowing = NO;
-    [FloaterManager sharedInstance].isUserForcedOn = NO;
     [[FloaterManager sharedInstance] setVisibility:NO];
 }
 
