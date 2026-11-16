@@ -153,10 +153,12 @@ void simulateVolumeDown(void) {
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
         
+        // 1. 悬浮球拖拽
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         panGesture.cancelsTouchesInView = NO; 
         [self.floatBtn addGestureRecognizer:panGesture];
         
+        // 2. 悬浮球长按（折叠）
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = 0.4; 
         longPress.allowableMovement = 15; 
@@ -179,8 +181,8 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel = [[UILabel alloc] init];
         self.timeBottomLabel.textColor = [UIColor whiteColor];
         self.timeBottomLabel.textAlignment = NSTextAlignmentCenter;
+        self.timeBottomLabel.userInteractionEnabled = YES; // 允许交互，才能长按唤醒
         
-        // 使用等宽数字字体
         if (@available(iOS 9.0, *)) {
             self.timeBottomLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightBold];
         } else {
@@ -192,9 +194,19 @@ void simulateVolumeDown(void) {
         self.timeBottomLabel.layer.masksToBounds = YES;
         self.timeBottomLabel.hidden = YES;
         self.timeBottomLabel.adjustsFontSizeToFitWidth = YES; 
+        
+        // 3. 时间条拖拽
+        UIPanGestureRecognizer *timeLabelPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        timeLabelPan.cancelsTouchesInView = NO;
+        [self.timeBottomLabel addGestureRecognizer:timeLabelPan];
+        
+        // 4. 时间条长按（展开）
+        UILongPressGestureRecognizer *timeLabelLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleTimeLabelLongPress:)];
+        timeLabelLongPress.minimumPressDuration = 0.4;
+        [self.timeBottomLabel addGestureRecognizer:timeLabelLongPress];
+        
         [self.mainContainer addSubview:self.timeBottomLabel];
         
-        // 启动方向检测定时器（如果窗口未隐藏）
         if (!self.window.hidden) {
             self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
             self.orientationTimer.tolerance = 0.2;
@@ -281,23 +293,45 @@ void simulateVolumeDown(void) {
     self.mainContainer.center = c;
 }
 
-// 【核心修改】：长按隐藏悬浮球
+// 悬浮球长按：折叠
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        // 1. 给个轻微震动反馈，提示隐藏成功
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [gen impactOccurred];
         
-        // 2. 自动把配置文件里的状态改成“0”
-        NSString *showPath = @"/var/mobile/Library/Preferences/volumefloater_show.txt";
-        [@"0" writeToFile:showPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        // 1. 球隐藏
+        self.floatBtn.hidden = YES;
+        // 2. 强制保留时间作为唤醒锚点
+        self.timeBottomLabel.hidden = NO; 
         
-        // 3. 隐藏悬浮球并杀掉所有定时器
-        [self setVisibility:NO];
+        // 3. 确保时间定时器在运转
+        if (!self.timeTimer) {
+            [self updateTimeText];
+            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+            self.timeTimer.tolerance = 0.5;
+        }
     }
 }
 
-// 重构定时器逻辑，防止滑块拖动时频繁重建定时器
+// 时间条长按：展开
+- (void)handleTimeLabelLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [gen impactOccurred];
+        
+        // 1. 球显示
+        self.floatBtn.hidden = NO;
+        
+        // 2. 恢复时间条的控制台设置
+        NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
+        if (![timeStatus isEqualToString:@"1"]) {
+            self.timeBottomLabel.hidden = YES;
+            [self.timeTimer invalidate];
+            self.timeTimer = nil;
+        }
+    }
+}
+
 - (void)updateUI {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *sizeStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_size.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -337,19 +371,23 @@ void simulateVolumeDown(void) {
         
         NSString *timeStatus = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_time.txt" encoding:NSUTF8StringEncoding error:nil];
         BOOL showTime = [timeStatus isEqualToString:@"1"];
+        BOOL isCollapsed = self.floatBtn.hidden;
         
-        if (showTime) {
+        if (isCollapsed) {
+            // 折叠状态：无条件保留时间
             self.timeBottomLabel.hidden = NO;
-            [self updateTimeText];
-            // 只有当悬浮球显示着，且定时器不存在时，才创建时间定时器
-            if (!self.window.hidden && !self.timeTimer) {
-                self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
-                self.timeTimer.tolerance = 0.5;
-            }
         } else {
-            self.timeBottomLabel.hidden = YES;
+            // 展开状态：根据控制台设置
+            self.timeBottomLabel.hidden = !showTime;
+        }
+        
+        if (self.timeBottomLabel.hidden) {
             [self.timeTimer invalidate];
             self.timeTimer = nil;
+        } else if (!self.window.hidden && !self.timeTimer) {
+            [self updateTimeText];
+            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+            self.timeTimer.tolerance = 0.5;
         }
         
         NSString *title = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" encoding:NSUTF8StringEncoding error:nil];
@@ -370,20 +408,19 @@ void simulateVolumeDown(void) {
     self.timeBottomLabel.text = [NSString stringWithFormat:@"%@ • %d%%", timeStr, batteryPercent];
 }
 
-// 隐藏悬浮球时彻底停掉所有定时器，真·0耗电
+// 彻底隐藏悬浮球（控制台关闭）
 - (void)setVisibility:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.window.hidden = !visible;
         
         if (visible) {
-            // 显示时，重新启动定时器
+            self.floatBtn.hidden = NO; // 唤醒时强制展开
             if (!self.orientationTimer) {
                 self.orientationTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkAutoOrientation) userInfo:nil repeats:YES];
                 self.orientationTimer.tolerance = 0.2;
             }
-            [self updateUI]; // 触发一下时间定时器的启动
+            [self updateUI]; 
         } else {
-            // 隐藏时，销毁所有定时器，彻底休眠
             [self.orientationTimer invalidate];
             self.orientationTimer = nil;
             [self.timeTimer invalidate];
@@ -392,7 +429,6 @@ void simulateVolumeDown(void) {
     });
 }
 
-// 【保留原汁原味的高级震动引擎】
 - (void)handleTouchUpInside {
     if (self.window.hidden) return;
     
@@ -472,7 +508,6 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// --- 修复编译报错：先声明回调函数 ---
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
