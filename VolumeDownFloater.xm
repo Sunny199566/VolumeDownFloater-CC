@@ -5,9 +5,6 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// 【关键】：声明苹果底层获取前台包名的 C 函数
-extern NSString* SBFrontmostApplicationDisplayIdentifier(void);
-
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
@@ -99,6 +96,21 @@ void simulateVolumeDown(void) {
 - (CGSize)getPortraitScreenSize {
     CGSize size = [UIScreen mainScreen].bounds.size;
     return CGSizeMake(MIN(size.width, size.height), MAX(size.width, size.height));
+}
+
+// 【修复点】：使用 dlsym 动态获取底层 C 函数，解决链接报错
+- (NSString *)getFrontApp {
+    static NSString* (*SBFrontmostApplicationDisplayIdentifier)(void) = NULL;
+    if (!SBFrontmostApplicationDisplayIdentifier) {
+        SBFrontmostApplicationDisplayIdentifier = (NSString* (*)(void))dlsym(RTLD_DEFAULT, "SBFrontmostApplicationDisplayIdentifier");
+    }
+    
+    @try {
+        if (SBFrontmostApplicationDisplayIdentifier) {
+            return SBFrontmostApplicationDisplayIdentifier();
+        }
+    } @catch (NSException *e) {}
+    return nil;
 }
 
 - (void)setup {
@@ -207,11 +219,7 @@ void simulateVolumeDown(void) {
 }
 
 - (void)checkAutoOrientation {
-    // 【终极杀招】：使用 SBFrontmostApplicationDisplayIdentifier 精准获取前台
-    NSString *frontApp = nil;
-    @try {
-        frontApp = SBFrontmostApplicationDisplayIdentifier();
-    } @catch (NSException *e) {}
+    NSString *frontApp = [self getFrontApp];
     
     if (frontApp) {
         // 如果前台是王者荣耀
