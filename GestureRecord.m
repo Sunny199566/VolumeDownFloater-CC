@@ -1,69 +1,81 @@
 #import "GestureRecord.h"
 
-@interface GestureRecorder()
-@property (nonatomic, strong) NSMutableArray<GesturePoint*> *recordBuffer;
-@property (nonatomic, assign) NSTimeInterval baseTime;
+@implementation GesturePoint
+- (NSDictionary *)toDictionary {
+    return @{
+        @"fingerId": @(self.fingerId),
+        @"phase": @(self.phase),
+        @"x": @(self.x),
+        @"y": @(self.y),
+        @"ts": @(self.timestamp)
+    };
+}
++ (GesturePoint *)fromDictionary:(NSDictionary *)dict {
+    GesturePoint *p = [[GesturePoint alloc] init];
+    p.fingerId = [dict[@"fingerId"] integerValue];
+    p.phase = [dict[@"phase"] integerValue];
+    p.x = [dict[@"x"] floatValue];
+    p.y = [dict[@"y"] floatValue];
+    p.timestamp = [dict[@"ts"] doubleValue];
+    return p;
+}
 @end
 
 @implementation GestureRecorder
 + (instancetype)sharedInstance {
-    static GestureRecorder *ins;
+    static GestureRecorder *inst;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ ins = [GestureRecorder new]; });
-    return ins;
+    dispatch_once(&once, ^{
+        inst = [[GestureRecorder alloc] init];
+    });
+    return inst;
 }
-
-- (instancetype)init {
-    self = [super init];
-    if(self) {
-        _recordBuffer = [NSMutableArray new];
-        _baseTime = 0;
-    }
-    return self;
-}
-
-- (BOOL)isRecording {
-    return _baseTime > 0;
-}
-
 - (void)startRecord {
-    [_recordBuffer removeAllObjects];
-    _baseTime = [[NSDate date] timeIntervalSince1970];
+    self.isRecording = YES;
+    self.recordBuffer = [NSMutableArray array];
+    self.baseTime = [[NSDate date] timeIntervalSince1970];
 }
-
-- (void)receiveTouchEvent:(CGPoint)pos finger:(int)fid phase:(GGTouchPhase)phase time:(NSTimeInterval)ts {
-    if(!self.isRecording) return;
-    GesturePoint *p = [GesturePoint new];
-    p.point = pos;
-    p.timestamp = ts - _baseTime;
-    p.fingerID = fid;
-    p.phase = phase;
-    [_recordBuffer addObject:p];
-}
-
 - (void)stopRecordAndSaveWithName:(NSString *)name {
-    _baseTime = 0;
-    NSMutableArray *jsonArr = [NSMutableArray new];
-    for(GesturePoint *pt in _recordBuffer) {
-        [jsonArr addObject:@{
-            @"x":@(pt.point.x),
-            @"y":@(pt.point.y),
-            @"finger":@(pt.fingerID),
-            @"phase":@(pt.phase),
-            @"time":@(pt.timestamp)
-        }];
+    self.isRecording = NO;
+    NSMutableArray *jsonArr = [NSMutableArray array];
+    for(GesturePoint *pt in self.recordBuffer) {
+        [jsonArr addObject:[pt toDictionary]];
     }
-    NSString *savePath = [NSString stringWithFormat:@"/var/jb/var/mobile/Documents/%@.json",name];
-    [jsonArr writeToFile:savePath atomically:YES];
+    NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/%@.json", name];
+    [jsonArr writeToFile:path atomically:YES];
+}
+- (void)receiveMultiTouch:(NSArray *)touches {
+    if(!self.isRecording) return;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970] - self.baseTime;
+    for(GesturePoint *tp in touches) {
+        tp.timestamp = now;
+        [self.recordBuffer addObject:tp];
+    }
 }
 
 - (void)playGestureWithName:(NSString *)name {
-    NSString *path = [NSString stringWithFormat:@"/var/jb/var/mobile/Documents/%@.json",name];
-    NSArray *data = [NSArray arrayWithContentsOfFile:path];
-    if (!data) return;
-    // ========== 回放事件发送预留位置，后续填入GSEvent发送代码 ==========
+    NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/%@.json", name];
+    NSArray *raw = [NSArray arrayWithContentsOfFile:path];
+    if(!raw) return;
+    NSMutableArray<GesturePoint*> *points = [NSMutableArray array];
+    for(NSDictionary *d in raw) {
+        [points addObject:[GesturePoint fromDictionary:d]];
+    }
+    // 时序回放，按时间延迟派发多点事件
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        NSTimeInterval prevTs = 0;
+        for(GesturePoint *pt in points) {
+            NSTimeInterval delay = pt.timestamp - prevTs;
+            if(delay < 0) delay = 0;
+            prevTs = pt.timestamp;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                // 这里构造多点GSEvent投递，配套Tweak.xm内的投递函数
+                [self sendReplayedTouch:pt];
+            });
+        }
+    });
 }
-@end
 
-@implementation GesturePoint
+// 空壳，实现放在Tweak.xm（GSEvent私有构造放在xm，分离代码更稳定）
+- (void)sendReplayedTouch:(GesturePoint *)pt {}
 @end
