@@ -21,8 +21,8 @@ typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemCl
 typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 
-// 使用最标准的 Digitizer 事件
-typedef IOHIDEventRef (*IOHIDEventCreateDigitizerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, Boolean);
+// 使用最标准的 15 参数触摸事件
+typedef IOHIDEventRef (*IOHIDEventCreateDigitizerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, IOFixed, IOFixed, IOFixed, IOFixed, IOFixed, Boolean, Boolean, Boolean);
 
 typedef int (*IOHIDEventGetType_t)(IOHIDEventRef);
 typedef int64_t (*IOHIDEventGetIntegerValue_t)(IOHIDEventRef, uint32_t);
@@ -235,26 +235,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 
 
 // ================= 回放器实现 =================
-// 全局永远只加载一次，绝不卸载
-static IOHIDEventSystemClientRef gPlayClient = NULL;
-static IOHIDEventCreateDigitizerEvent_t gCreateDigitizerEvent = NULL;
-static IOHIDEventSystemClientDispatchEvent_t gDispatchEvent = NULL;
-
-void setupPlayHID() {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-        if (!handle) return;
-        IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
-        gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
-        gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(handle, "IOHIDEventCreateDigitizerEvent");
-        if (create) {
-            gPlayClient = create(kCFAllocatorDefault);
-        }
-        // 注意：这里故意不调用 dlclose，防止底层代码被卸载导致系统崩溃
-    });
-}
-
 @implementation VDFGesturePlayer
 + (instancetype)shared {
     static VDFGesturePlayer *o;
@@ -272,7 +252,6 @@ void setupPlayHID() {
 
 - (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval {
     if (self.playing) return;
-    setupPlayHID();
     self.script = script;
     self.speed = MAX(0.1, speed);
     self.repeatCount = repeat;
@@ -300,7 +279,7 @@ void setupPlayHID() {
             NSDictionary *e = events[idx++];
             double t = [e[@"t"] doubleValue] / 1000.0;
             double delay = (t - lastT) / weakSelf.speed;
-            if (delay < 0.015) delay = 0.015; // 强制最小 15ms 间隔
+            if (delay < 0.015) delay = 0.015; // 强制最小 15ms 间隔，防止系统卡死
             lastT = t;
 
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -358,30 +337,47 @@ void setupPlayHID() {
     [self.activeFingers removeAllObjects];
 }
 
+// 核心修复：独立分发，延迟释放，彻底解决野指针导致的安全模式
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
-    // 映射手指 ID，避免干扰真实手指 (真实通常是 0~4)
-    int finger = 8 + (originalFinger % 4); 
+    int finger = 8 + (originalFinger % 2); 
+    
+    // 过滤非法坐标
+    if (isnan(x) || isinf(x) || x < 0) x = 100;
+    if (isnan(y) || isinf(y) || y < 0) y = 100;
 
-    // 过滤非法的坐标
-    if (isnan(x) || isinf(x) || x < 0 || x > 5000) x = 100;
-    if (isnan(y) || isinf(y) || y < 0 || y > 5000) y = 100;
-
-    if (!gPlayClient || !gCreateDigitizerEvent || !gDispatchEvent) return;
-
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!handle) return;
+    
+    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
+    IOHIDEventSystemClientDispatchEvent_t dispatch = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
+    IOHIDEventCreateDigitizerEvent_t createEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(handle, "IOHIDEventCreateDigitizerEvent");
+    
+    if (!create || !dispatch || !createEvent) {
+        dlclose(handle);
+        return;
+    }
+    
+    IOHIDEventSystemClientRef client = create(kCFAllocatorDefault);
+    if (!client) {
+        dlclose(handle);
+        return;
+    }
+    
     BOOL down = [phase isEqualToString:@"down"];
     BOOL up = [phase isEqualToString:@"up"];
     
+    uint32_t mask = kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange;
     Boolean range = !up;
     Boolean touch = !up;
 
     if (down) [self.activeFingers addObject:@(finger)];
 
-    IOHIDEventRef ev = gCreateDigitizerEvent(kCFAllocatorDefault,
+    IOHIDEventRef ev = createEvent(kCFAllocatorDefault,
                                   mach_absolute_time(),
                                   kIOHIDDigitizerTransducerTypeFinger,
-                                  0, // index
-                                  finger, // identity
-                                  kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange, // eventMask
+                                  0,
+                                  finger,
+                                  mask,
                                   0,
                                   (IOFixed)(x * 65536.0),
                                   (IOFixed)(y * 65536.0),
@@ -392,9 +388,15 @@ void setupPlayHID() {
                                   touch,
                                   0);
     if (ev) {
-        gDispatchEvent(gPlayClient, ev);
+        dispatch(client, ev);
         CFRelease(ev);
     }
+    
+    // 核心修复：延迟 1 秒后再释放 Client 和关闭动态库，防止系统异步处理时内存已被销毁导致崩溃
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        CFRelease(client);
+        dlclose(handle);
+    });
 
     if (up) [self.activeFingers removeObject:@(finger)];
 }
@@ -1010,7 +1012,6 @@ void setupPlayHID() {
     self.gestureState = 2;
     self.window.hidden = YES; 
     
-    // 延迟 0.3 秒再开始执行注入，防止你点击悬浮球的手指与注入的手指产生冲突
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [[VDFGesturePlayer shared] playScript:script
                                         speed:[cfg[@"speed"] doubleValue]
