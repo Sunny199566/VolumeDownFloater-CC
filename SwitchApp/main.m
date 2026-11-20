@@ -12,6 +12,11 @@
 @property (strong, nonatomic) UISlider *alphaSlider;
 @property (strong, nonatomic) NSString *currentColor;
 @property (strong, nonatomic) NSMutableArray *colorButtons;
+
+// ========== 新增：手势录制按钮 ==========
+@property (strong, nonatomic) UIButton *btnStartRecord;
+@property (strong, nonatomic) UIButton *btnStopRecord;
+@property (strong, nonatomic) UIButton *btnPlayGesture;
 @end
 
 @implementation AppDelegate
@@ -24,7 +29,7 @@
     self.window.hidden = NO;
 
     UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.window.bounds];
-    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 900);
+    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 1100); // ✅ 加高滚动区域，给手势UI预留空间
     [vc.view addSubview:scrollView];
 
     UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 40, self.window.bounds.size.width, 40)];
@@ -183,8 +188,56 @@
     [clearBtn addTarget:self action:@selector(clearImage) forControlEvents:UIControlEventTouchUpInside];
     [scrollView addSubview:clearBtn];
 
+    // ========== ✅【新增：手势录制控制区域】==========
+    UILabel *gestureLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 890, self.window.bounds.size.width - 80,30)];
+    gestureLabel.text = @"手势录制控制";
+    gestureLabel.font = [UIFont boldSystemFontOfSize:19];
+    [scrollView addSubview:gestureLabel];
+
+    self.btnStartRecord = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.btnStartRecord.frame = CGRectMake(40,930,self.window.bounds.size.width-80,44);
+    [self.btnStartRecord setTitle:@"开始录制手势" forState:UIControlStateNormal];
+    self.btnStartRecord.backgroundColor = [UIColor systemOrangeColor];
+    [self.btnStartRecord setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.btnStartRecord.layer.cornerRadius =10;
+    [self.btnStartRecord addTarget:self action:@selector(startRecordGesture) forControlEvents:UIControlEventTouchUpInside];
+    [scrollView addSubview:self.btnStartRecord];
+
+    self.btnStopRecord = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.btnStopRecord.frame = CGRectMake(40,984,self.window.bounds.size.width-80,44);
+    [self.btnStopRecord setTitle:@"停止录制手势" forState:UIControlStateNormal];
+    self.btnStopRecord.backgroundColor = [UIColor systemRedColor];
+    [self.btnStopRecord setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.btnStopRecord.layer.cornerRadius =10;
+    [self.btnStopRecord addTarget:self action:@selector(stopRecordGesture) forControlEvents:UIControlEventTouchUpInside];
+    [scrollView addSubview:self.btnStopRecord];
+
+    self.btnPlayGesture = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.btnPlayGesture.frame = CGRectMake(40,1038,self.window.bounds.size.width-80,44);
+    [self.btnPlayGesture setTitle:@"回放已录制手势" forState:UIControlStateNormal];
+    self.btnPlayGesture.backgroundColor = [UIColor systemGreenColor];
+    [self.btnPlayGesture setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.btnPlayGesture.layer.cornerRadius =10;
+    [self.btnPlayGesture addTarget:self action:@selector(playRecordedGesture) forControlEvents:UIControlEventTouchUpInside];
+    [scrollView addSubview:self.btnPlayGesture];
+    // =========================================
+
     [self syncState:self.toggleSwitch.isOn];
     return YES;
+}
+
+// ========== ✅ 新增：手势通知发送方法 ==========
+-(void)startRecordGesture{
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        CFSTR("com.yourname.volumedownfloater.gesture_start_record"), NULL, NULL, YES);
+}
+-(void)stopRecordGesture{
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        CFSTR("com.yourname.volumedownfloater.gesture_stop_record"), NULL, NULL, YES);
+}
+-(void)playRecordedGesture{
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        CFSTR("com.yourname.volumedownfloater.gesture_play"), NULL, NULL, YES);
 }
 
 - (void)updateColorButtonBorders {
@@ -235,7 +288,6 @@
     [self triggerTestHaptic];
 }
 
-// 加上发通知逻辑，悬浮球立刻同步！
 - (void)hapticChanged:(UISlider *)sender {
     NSString *valStr = [NSString stringWithFormat:@"%f", self.hapticSlider.value];
     [valStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_haptic.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -243,7 +295,6 @@
     NSString *durStr = [NSString stringWithFormat:@"%f", self.durationSlider.value];
     [durStr writeToFile:@"/var/mobile/Library/Preferences/volumefloater_duration.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
-    // 让悬浮球重新读取数值
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
     
     [self triggerTestHaptic];
@@ -259,7 +310,6 @@
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, NULL, YES);
 }
 
-// 删除了耗电的高级震动引擎，用和悬浮球一致的省电循环法
 - (void)triggerTestHaptic {
     if (@available(iOS 13.0, *)) {
         BOOL isCustom = [[NSUserDefaults standardUserDefaults] boolForKey:@"customHapticState"];
@@ -292,7 +342,6 @@
 
 - (void)textChanged:(UITextField *)sender {
     NSString *newText = sender.text;
-    // 空文本写 @""，浮球端会回落到默认文案“音量-”
     if (newText.length == 0) newText = @"";
     [newText writeToFile:@"/var/mobile/Library/Preferences/volumefloater_title.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self uiChanged:nil];
