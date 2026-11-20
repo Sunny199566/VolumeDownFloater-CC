@@ -46,7 +46,8 @@ static void hooked_GSEventSendEvent(void *event) {
     orig_GSEventSendEvent(event);
     if ([GestureRecorder sharedInstance].isRecording) {
         NSArray *touchArray = parseMultiGSEvent(event);
-        [[GestureRecorder sharedInstance] receiveTouchFrame:touchArray];
+        // ✅ 已修复：receiveTouchPoints 和你头文件方法名保持一致
+        [[GestureRecorder sharedInstance] receiveTouchPoints:touchArray];
     }
 }
 
