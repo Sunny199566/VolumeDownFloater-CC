@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -17,6 +18,7 @@
 @property (strong, nonatomic) UIButton *btnStartRecord;
 @property (strong, nonatomic) UIButton *btnStopRecord;
 @property (strong, nonatomic) UIButton *btnPlayGesture;
+@property (nonatomic, assign) BOOL isRecording;
 @end
 
 @implementation AppDelegate
@@ -29,7 +31,7 @@
     self.window.hidden = NO;
 
     UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.window.bounds];
-    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 1100); // ✅ 加高滚动区域，给手势UI预留空间
+    scrollView.contentSize = CGSizeMake(self.window.bounds.size.width, 1100);
     [vc.view addSubview:scrollView];
 
     UILabel *headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 40, self.window.bounds.size.width, 40)];
@@ -184,11 +186,11 @@
     [clearBtn setTitle:@"清除图片" forState:UIControlStateNormal];
     clearBtn.backgroundColor = [UIColor systemRedColor];
     [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    clearBtn.layer.cornerRadius = 10;
+    clearBtn.layer.cornerRadius =10;
     [clearBtn addTarget:self action:@selector(clearImage) forControlEvents:UIControlEventTouchUpInside];
     [scrollView addSubview:clearBtn];
 
-    // ========== ✅【新增：手势录制控制区域】==========
+    // ========== ✅【手势录制控制区域】==========
     UILabel *gestureLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 890, self.window.bounds.size.width - 80,30)];
     gestureLabel.text = @"手势录制控制";
     gestureLabel.font = [UIFont boldSystemFontOfSize:19];
@@ -209,6 +211,7 @@
     self.btnStopRecord.backgroundColor = [UIColor systemRedColor];
     [self.btnStopRecord setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.btnStopRecord.layer.cornerRadius =10;
+    self.btnStopRecord.enabled = NO;
     [self.btnStopRecord addTarget:self action:@selector(stopRecordGesture) forControlEvents:UIControlEventTouchUpInside];
     [scrollView addSubview:self.btnStopRecord];
 
@@ -226,18 +229,26 @@
     return YES;
 }
 
-// ========== ✅ 新增：手势通知发送方法 ==========
+// ========== ✅ 手势通知发送方法（已对齐Tweak端 com.sunny.gesturecontrol） ==========
 -(void)startRecordGesture{
+    if(self.isRecording) return;
+    self.isRecording = YES;
+    self.btnStartRecord.enabled = NO;
+    self.btnStopRecord.enabled = YES;
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-        CFSTR("com.yourname.volumedownfloater.gesture_start_record"), NULL, NULL, YES);
+        CFSTR("com.sunny.gesturecontrol"), (__bridge CFTypeRef _Nullable)(@"start"), NULL, YES);
 }
 -(void)stopRecordGesture{
+    if(!self.isRecording) return;
+    self.isRecording = NO;
+    self.btnStartRecord.enabled = YES;
+    self.btnStopRecord.enabled = NO;
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-        CFSTR("com.yourname.volumedownfloater.gesture_stop_record"), NULL, NULL, YES);
+        CFSTR("com.sunny.gesturecontrol"), (__bridge CFTypeRef _Nullable)(@"stop"), NULL, YES);
 }
 -(void)playRecordedGesture{
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-        CFSTR("com.yourname.volumedownfloater.gesture_play"), NULL, NULL, YES);
+        CFSTR("com.sunny.gesturecontrol"), (__bridge CFTypeRef _Nullable)(@"play"), NULL, YES);
 }
 
 - (void)updateColorButtonBorders {
