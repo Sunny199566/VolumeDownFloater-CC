@@ -14,6 +14,7 @@ typedef enum : NSInteger {
 @property (nonatomic, assign) TouchPhase phase;
 @property (nonatomic, assign) float x;
 @property (nonatomic, assign) float y;
+@property (nonatomic, assign) NSTimeInterval timestamp;  // ✅ 补上时间戳
 @end
 
 @interface GestureRecorder : NSObject
