@@ -91,7 +91,7 @@ static void loadGSSymbol() {
     self.floaterBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
     self.floaterBtn.layer.cornerRadius = 30;
     [self.floaterBtn setTitle:@"🔊" forState:UIControlStateNormal];
-    self.floatWindow addSubview:self.floaterBtn];
+    [self.floatWindow addSubview:self.floaterBtn];
     self.floatWindow.rootViewController = [[UIViewController alloc] init];
 }
 
