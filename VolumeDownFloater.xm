@@ -13,7 +13,6 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
 typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
 
-// 修正：回调函数指针类型
 typedef void (*IOHIDEventSystemClientEventCallback_t)(void *target, void *refcon, IOHIDEventSystemClientRef client, IOHIDEventRef event);
 typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemClientRef, IOHIDEventSystemClientEventCallback_t, void *, void *);
 
@@ -55,14 +54,7 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// ================= 前向声明与穿透窗口 =================
-@class FloaterManager;
-@interface FloaterManager : NSObject
-+ (instancetype)sharedInstance;
-@property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, assign) NSInteger gestureState;
-@end
-
+// ================= 穿透窗口 =================
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -92,7 +84,36 @@ void simulateVolumeDown(void) {
 }
 @end
 
-// ================= 录制器 =================
+// ================= 核心接口前置声明 =================
+@class VDFGesturePlayer;
+
+@interface FloaterManager : NSObject
+@property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UIView *mainContainer; 
+@property (strong, nonatomic) UIButton *floatBtn;
+@property (strong, nonatomic) UILabel *titleLabel;       
+@property (strong, nonatomic) UILabel *timeBottomLabel;  
+@property (strong, nonatomic) UIImageView *bgImageView;
+@property (nonatomic, assign) CGFloat currentAngle;
+@property (nonatomic, assign) CGFloat lastSysAngle; 
+@property (nonatomic, assign) CGPoint lastTouchPoint; 
+@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
+@property (strong, nonatomic) NSTimer *timeTimer;
+@property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (nonatomic, assign) NSInteger gestureState;
+
++ (instancetype)sharedInstance;
+- (void)setup;
+- (void)setVisibility:(BOOL)visible;
+- (void)updateUI;
+- (CGSize)getPortraitScreenSize;
+- (void)stopRecordingAndSave;
+- (void)stopPlaying;
+- (void)startRecording;
+- (NSMutableDictionary *)loadGestureConfig;
+- (void)runSelectedScript;
+@end
+
 @interface VDFGestureRecorder : NSObject
 @property (nonatomic, assign) BOOL recording;
 @property (nonatomic, strong) NSMutableArray *events;
@@ -102,6 +123,22 @@ void simulateVolumeDown(void) {
 - (NSDictionary *)stopAndBuildScript;
 @end
 
+@interface VDFGesturePlayer : NSObject
+@property (nonatomic, assign) BOOL playing;
+@property (nonatomic, strong) NSDictionary *script;
+@property (nonatomic, assign) double speed;
+@property (nonatomic, assign) NSInteger repeatCount;
+@property (nonatomic, assign) double interval;
+@property (nonatomic, assign) NSInteger currentLoop;
+@property (nonatomic, strong) dispatch_queue_t playQueue;
+@property (nonatomic, strong) NSMutableSet *activeFingers;
++ (instancetype)shared;
+- (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval;
+- (void)stop;
+@end
+
+
+// ================= 录制器实现 =================
 static IOHIDEventSystemClientRef gRecordClient = NULL;
 static void *gRecordHandle = NULL;
 static VDFGestureRecorder *gRecorder = nil;
@@ -192,21 +229,8 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 @end
 
-// ================= 回放器 =================
-@interface VDFGesturePlayer : NSObject
-@property (nonatomic, assign) BOOL playing;
-@property (nonatomic, strong) NSDictionary *script;
-@property (nonatomic, assign) double speed;
-@property (nonatomic, assign) NSInteger repeatCount;
-@property (nonatomic, assign) double interval;
-@property (nonatomic, assign) NSInteger currentLoop;
-@property (nonatomic, strong) dispatch_queue_t playQueue;
-@property (nonatomic, strong) NSMutableSet *activeFingers;
-+ (instancetype)shared;
-- (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval;
-- (void)stop;
-@end
 
+// ================= 回放器实现 =================
 @implementation VDFGesturePlayer
 + (instancetype)shared {
     static VDFGesturePlayer *o;
@@ -351,31 +375,8 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 @end
 
-// ================= 悬浮窗管理器 =================
-@interface FloaterManager : NSObject
-@property (strong, nonatomic) UIWindow *window;
-@property (strong, nonatomic) UIView *mainContainer; 
-@property (strong, nonatomic) UIButton *floatBtn;
-@property (strong, nonatomic) UILabel *titleLabel;       
-@property (strong, nonatomic) UILabel *timeBottomLabel;  
-@property (strong, nonatomic) UIImageView *bgImageView;
-@property (nonatomic, assign) CGFloat currentAngle;
-@property (nonatomic, assign) CGFloat lastSysAngle; 
-@property (nonatomic, assign) CGPoint lastTouchPoint; 
-@property (strong, nonatomic) CHHapticEngine *hapticEngine; 
-@property (strong, nonatomic) NSTimer *timeTimer;
-@property (strong, nonatomic) NSTimer *orientationTimer; 
-@property (nonatomic, assign) NSInteger gestureState; // 0 idle, 1 recording, 2 playing
 
-+ (instancetype)sharedInstance;
-- (void)setup;
-- (void)setVisibility:(BOOL)visible;
-- (void)updateUI;
-- (CGSize)getPortraitScreenSize;
-- (void)stopRecordingAndSave;
-- (void)stopPlaying;
-@end
-
+// ================= 悬浮窗管理器实现 =================
 @implementation FloaterManager
 
 + (instancetype)sharedInstance {
@@ -1010,6 +1011,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     }
 }
 @end
+
 
 // ================= Hook 拦截物理音量键 =================
 %hook SBVolumeControl
