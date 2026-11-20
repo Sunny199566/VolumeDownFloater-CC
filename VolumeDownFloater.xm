@@ -8,6 +8,7 @@
 // ================= IOKit 类型与常量定义 =================
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
+typedef int32_t IOFixed;
 
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
@@ -18,7 +19,10 @@ typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemCl
 
 typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
-typedef IOHIDEventRef (*IOHIDEventCreateDigitizerFingerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, uint32_t);
+
+// 使用更稳定的底层事件创建函数
+typedef IOHIDEventRef (*IOHIDEventCreateDigitizerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, Boolean);
+
 typedef int (*IOHIDEventGetType_t)(IOHIDEventRef);
 typedef int64_t (*IOHIDEventGetIntegerValue_t)(IOHIDEventRef, uint32_t);
 typedef double (*IOHIDEventGetFloatValue_t)(IOHIDEventRef, uint32_t);
@@ -32,6 +36,7 @@ typedef void (*IOHIDEventSetIntegerValue_t)(IOHIDEventRef, uint32_t, int64_t);
 #define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x3c
 #define kIOHIDDigitizerEventRange (1 << 0)
 #define kIOHIDDigitizerEventTouch (1 << 1)
+#define kIOHIDDigitizerTransducerTypeFinger 2
 
 void simulateVolumeDown(void) {
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
@@ -232,6 +237,13 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 
 
 // ================= 回放器实现 =================
+// 修复：使用全局静态 Client 和 函数指针，避免频繁释放导致 SpringBoard 崩溃
+static IOHIDEventSystemClientRef gPlayClient = NULL;
+static IOHIDEventCreateDigitizerEvent_t gCreateDigitizerEvent = NULL;
+static IOHIDEventSystemClientDispatchEvent_t gDispatchEvent = NULL;
+static IOHIDEventSetIntegerValue_t gSetIntValue = NULL;
+static void *gPlayHandle = NULL;
+
 @implementation VDFGesturePlayer
 + (instancetype)shared {
     static VDFGesturePlayer *o;
@@ -248,8 +260,20 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     return self;
 }
 
+- (void)setupHID {
+    if (gPlayClient) return;
+    gPlayHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!gPlayHandle) return;
+    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(gPlayHandle, "IOHIDEventSystemClientCreate");
+    gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(gPlayHandle, "IOHIDEventSystemClientDispatchEvent");
+    gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(gPlayHandle, "IOHIDEventCreateDigitizerEvent");
+    gSetIntValue = (IOHIDEventSetIntegerValue_t)dlsym(gPlayHandle, "IOHIDEventSetIntegerValue");
+    if (create) gPlayClient = create(kCFAllocatorDefault);
+}
+
 - (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval {
     if (self.playing) return;
+    [self setupHID]; // 初始化注入环境
     self.script = script;
     self.speed = MAX(0.1, speed);
     self.repeatCount = repeat;
@@ -304,8 +328,10 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 
 - (void)finish {
-    [self releaseAllFingers];
-    self.playing = NO;
+    dispatch_sync(self.playQueue, ^{
+        [self releaseAllFingers];
+        self.playing = NO;
+    });
     dispatch_async(dispatch_get_main_queue(), ^{
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
@@ -314,8 +340,11 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 
 - (void)stop {
-    self.playing = NO;
-    [self releaseAllFingers];
+    if (!self.playing) return;
+    dispatch_sync(self.playQueue, ^{
+        self.playing = NO;
+        [self releaseAllFingers];
+    });
     dispatch_async(dispatch_get_main_queue(), ^{
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
@@ -332,45 +361,41 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
-    int finger = 8 + (originalFinger % 2);
-
-    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!handle) return;
-    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
-    IOHIDEventSystemClientDispatchEvent_t dispatch = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
-    IOHIDEventCreateDigitizerFingerEvent_t createEvent = (IOHIDEventCreateDigitizerFingerEvent_t)dlsym(handle, "IOHIDEventCreateDigitizerFingerEvent");
-    IOHIDEventSetIntegerValue_t setInt = (IOHIDEventSetIntegerValue_t)dlsym(handle, "IOHIDEventSetIntegerValue");
-    if (!create || !dispatch || !createEvent) { dlclose(handle); return; }
-
-    IOHIDEventSystemClientRef client = create(kCFAllocatorDefault);
-    if (!client) { dlclose(handle); return; }
+    int finger = 8 + (originalFinger % 2); // 隔离真实手指
+    if (!gPlayClient || !gCreateDigitizerEvent || !gDispatchEvent) return;
 
     BOOL down = [phase isEqualToString:@"down"];
     BOOL up = [phase isEqualToString:@"up"];
-    Boolean range = down || (!up);
+    
+    uint32_t eventMask = kIOHIDDigitizerEventTouch;
+    if (down) eventMask |= kIOHIDDigitizerEventRange;
+    if (up) eventMask = 0;
+    
+    Boolean range = !up;
     Boolean touch = !up;
 
     if (down) [self.activeFingers addObject:@(finger)];
 
-    IOHIDEventRef ev = createEvent(kCFAllocatorDefault,
+    IOHIDEventRef ev = gCreateDigitizerEvent(kCFAllocatorDefault,
                                   mach_absolute_time(),
+                                  kIOHIDDigitizerTransducerTypeFinger,
                                   finger,
                                   0,
-                                  kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange,
-                                  (int32_t)(x * 65536.0),
-                                  (int32_t)(y * 65536.0),
+                                  eventMask,
+                                  0,
+                                  (IOFixed)(x * 65536.0),
+                                  (IOFixed)(y * 65536.0),
+                                  0,
                                   0,
                                   0,
                                   range,
                                   touch,
                                   0);
     if (ev) {
-        if (setInt) setInt(ev, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
-        dispatch(client, ev);
+        if (gSetIntValue) gSetIntValue(ev, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
+        gDispatchEvent(gPlayClient, ev);
         CFRelease(ev);
     }
-    CFRelease(client);
-    dlclose(handle);
 
     if (up) [self.activeFingers removeObject:@(finger)];
 }
@@ -624,7 +649,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     [self clampCurrentPosition];
 }
 
-// 长按菜单：改为原生 UIView 绘制
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
     
@@ -691,7 +715,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     }
 }
 
-// 获取最顶层 VC 防止弹窗被遮挡
 - (UIViewController *)getTopViewController {
     UIWindow *keyWindow = nil;
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -905,6 +928,37 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
             NSMutableDictionary *c = [self loadGestureConfig];
             c[@"selected"] = f;
             [self saveGestureConfig:c];
+        }]];
+    }
+    
+    // === 新增：删除脚本入口 ===
+    [sheet addAction:[UIAlertAction actionWithTitle:@"❌ 删除脚本" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        [self showDeleteScriptList];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
+    UIViewController *topVC = [self getTopViewController];
+    [topVC presentViewController:sheet animated:YES completion:nil];
+}
+
+// === 新增：删除脚本列表 ===
+- (void)showDeleteScriptList {
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self gestureDir] error:nil];
+    NSMutableArray *jsonFiles = [NSMutableArray array];
+    for (NSString *f in files) if ([f.pathExtension isEqualToString:@"json"]) [jsonFiles addObject:f];
+    if (!jsonFiles.count) return;
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"选择要删除的脚本" message:@"删除后不可恢复" preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *f in jsonFiles) {
+        [sheet addAction:[UIAlertAction actionWithTitle:f.stringByDeletingPathExtension style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+            NSString *path = [[self gestureDir] stringByAppendingPathComponent:f];
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            
+            NSMutableDictionary *cfg = [self loadGestureConfig];
+            if ([cfg[@"selected"] isEqualToString:f]) {
+                cfg[@"selected"] = @"";
+                [self saveGestureConfig:cfg];
+            }
         }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
