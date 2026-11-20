@@ -1,29 +1,28 @@
+#ifndef GestureRecord_h
+#define GestureRecord_h
 #import <Foundation/Foundation.h>
 
-typedef NS_ENUM(NSInteger, TouchPhase) {
+typedef enum : NSInteger {
     TouchPhaseBegan,
     TouchPhaseMoved,
     TouchPhaseEnded,
     TouchPhaseCancelled
-};
+} TouchPhase;
 
 @interface GesturePoint : NSObject
-@property (nonatomic, assign) NSInteger fingerId;
+@property (nonatomic, assign) int fingerId;
 @property (nonatomic, assign) TouchPhase phase;
-@property (nonatomic, assign) CGFloat x;
-@property (nonatomic, assign) CGFloat y;
-@property (nonatomic, assign) NSTimeInterval timestamp;
-- (NSDictionary *)toDictionary;
-+ (GesturePoint *)fromDictionary:(NSDictionary *)dict;
+@property (nonatomic, assign) float x;
+@property (nonatomic, assign) float y;
 @end
 
 @interface GestureRecorder : NSObject
-@property (nonatomic, assign) BOOL isRecording;
-@property (nonatomic, strong) NSMutableArray<GesturePoint *> *recordBuffer;
-@property (nonatomic, assign) NSTimeInterval baseTime;
 + (instancetype)sharedInstance;
+@property (nonatomic, assign) BOOL isRecording;
 - (void)startRecord;
 - (void)stopRecordAndSaveWithName:(NSString *)name;
 - (void)playGestureWithName:(NSString *)name;
-- (void)receiveMultiTouch:(NSArray *)touches;
+- (void)receiveTouchPoints:(NSArray<GesturePoint *> *)points;
 @end
+
+#endif
