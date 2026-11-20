@@ -94,6 +94,7 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) UILabel *titleLabel;       
 @property (strong, nonatomic) UILabel *timeBottomLabel;  
 @property (strong, nonatomic) UIImageView *bgImageView;
+@property (strong, nonatomic) UIView *menuView;
 @property (nonatomic, assign) CGFloat currentAngle;
 @property (nonatomic, assign) CGFloat lastSysAngle; 
 @property (nonatomic, assign) CGPoint lastTouchPoint; 
@@ -623,29 +624,86 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     [self clampCurrentPosition];
 }
 
+// 长按菜单：改为原生 UIView 绘制
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
     
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"悬浮球菜单" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"折叠隐藏" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [self collapseFloater];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"录制手势" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [self startRecording];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"选择脚本" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [self showScriptList];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"脚本设置" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [self showScriptSettings];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [gen impactOccurred];
+
+    if (self.menuView) {
+        [self.menuView removeFromSuperview];
+        self.menuView = nil;
+        return;
+    }
+
+    self.menuView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 140, 200)];
+    self.menuView.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.95];
+    self.menuView.layer.cornerRadius = 12;
+    self.menuView.layer.masksToBounds = YES;
     
-    UIViewController *topVC = self.window.rootViewController;
+    NSArray *titles = @[@"折叠隐藏", @"录制手势", @"选择脚本", @"脚本设置"];
+    CGFloat btnH = 50;
+    
+    for (int i = 0; i < titles.count; i++) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+        btn.frame = CGRectMake(0, i * btnH, 140, btnH);
+        [btn setTitle:titles[i] forState:UIControlStateNormal];
+        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+        btn.tag = i + 100;
+        [btn addTarget:self action:@selector(menuBtnTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [self.menuView addSubview:btn];
+        
+        if (i > 0) {
+            UIView *line = [[UIView alloc] initWithFrame:CGRectMake(10, i * btnH, 120, 0.5)];
+            line.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.2];
+            [self.menuView addSubview:line];
+        }
+    }
+    
+    CGPoint ballCenter = self.mainContainer.center;
+    CGFloat menuX = ballCenter.x;
+    CGFloat menuY = ballCenter.y;
+    
+    if (menuX > [UIScreen mainScreen].bounds.size.width / 2.0) {
+        menuX -= 100;
+    } else {
+        menuX += 100;
+    }
+    self.menuView.center = CGPointMake(menuX, menuY);
+    [self.window.rootViewController.view addSubview:self.menuView];
+}
+
+- (void)menuBtnTapped:(UIButton *)sender {
+    [self.menuView removeFromSuperview];
+    self.menuView = nil;
+    
+    NSInteger tag = sender.tag - 100;
+    if (tag == 0) {
+        [self collapseFloater]; 
+    } else if (tag == 1) {
+        [self startRecording];  
+    } else if (tag == 2) {
+        [self showScriptList];  
+    } else if (tag == 3) {
+        [self showScriptSettings]; 
+    }
+}
+
+// 获取最顶层 VC 防止弹窗被遮挡
+- (UIViewController *)getTopViewController {
+    UIWindow *keyWindow = nil;
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        if (window.isKeyWindow) { keyWindow = window; break; }
+    }
+    if (!keyWindow) return self.window.rootViewController;
+    
+    UIViewController *topVC = keyWindow.rootViewController;
     while (topVC.presentedViewController) {
         topVC = topVC.presentedViewController;
     }
-    [topVC presentViewController:sheet animated:YES completion:nil];
+    return topVC;
 }
 
 - (void)handleTimeLabelLongPress:(UILongPressGestureRecognizer *)gesture {
@@ -851,8 +909,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     
-    UIViewController *topVC = self.window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    UIViewController *topVC = [self getTopViewController];
     [topVC presentViewController:sheet animated:YES completion:nil];
 }
 
@@ -883,8 +940,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     
-    UIViewController *topVC = self.window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    UIViewController *topVC = [self getTopViewController];
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
