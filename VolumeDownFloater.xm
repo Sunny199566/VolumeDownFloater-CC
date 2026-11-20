@@ -15,7 +15,7 @@ static NSArray<GesturePoint *> * parseMultiGSEvent(void *event) {
     NSMutableArray *points = [NSMutableArray array];
     if (!event) return points;
 
-    // iOS17.0 固定偏移（适配你的iPhone15Pro 17.0）
+    // iOS17.0 固定结构体偏移（iPhone15Pro）
     uint32_t touchCount = *(uint32_t *)((uintptr_t)event + 0x38);
     void *touchesBuffer = (void *)((uintptr_t)event + 0x40);
 
@@ -46,7 +46,7 @@ static void hooked_GSEventSendEvent(void *event) {
     orig_GSEventSendEvent(event);
     if ([GestureRecorder sharedInstance].isRecording) {
         NSArray *touchArray = parseMultiGSEvent(event);
-        [[GestureRecorder sharedInstance] receiveTouchPoints:touchArray];
+        [[GestureRecorder sharedInstance] receiveTouchFrame:touchArray];
     }
 }
 
@@ -59,7 +59,7 @@ static void loadGSSymbol() {
     }
 }
 
-#pragma mark - 悬浮球管理器（原有逻辑保留）
+#pragma mark - 悬浮球管理器
 @interface FloaterManager : NSObject
 @property (nonatomic, strong) UIWindow *floatWindow;
 @property (nonatomic, strong) UIButton *floaterBtn;
@@ -67,7 +67,6 @@ static void loadGSSymbol() {
 - (void)setup;
 - (void)showFloater;
 - (void)hideFloater;
-- (void)updateUI;
 @end
 
 @implementation FloaterManager
@@ -81,76 +80,72 @@ static void loadGSSymbol() {
 }
 
 - (void)setup {
-    CGRect screen = [UIScreen mainScreen].bounds;
-    self.floatWindow = [[UIWindow alloc] initWithFrame:CGRectMake(screen.size.width - 70, screen.size.height/2, 60, 60)];
-    self.floatWindow.windowLevel = UIWindowLevelAlert + 1000;
-    self.floatWindow.hidden = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CGRect screenRect = [UIScreen mainScreen].bounds;
+        CGFloat w = 60;
+        CGFloat h = 60;
+        CGFloat x = screenRect.size.width - 70;
+        CGFloat y = screenRect.size.height / 2.0 - h / 2.0;
+        self.floatWindow = [[UIWindow alloc] initWithFrame:CGRectMake(x,y,w,h)];
+        self.floatWindow.windowLevel = UIWindowLevelAlert + 1000;
+        self.floatWindow.hidden = YES;
 
-    self.floaterBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.floaterBtn.frame = self.floatWindow.bounds;
-    self.floaterBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
-    self.floaterBtn.layer.cornerRadius = 30;
-    [self.floaterBtn setTitle:@"🔊" forState:UIControlStateNormal];
-    [self.floatWindow addSubview:self.floaterBtn];
-    self.floatWindow.rootViewController = [[UIViewController alloc] init];
+        self.floaterBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.floaterBtn.frame = CGRectMake(0,0,w,h);
+        self.floaterBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
+        self.floaterBtn.layer.cornerRadius = 30;
+        [self.floaterBtn setTitle:@"🔊" forState:UIControlStateNormal];
+        [self.floatWindow addSubview:self.floaterBtn];
+        self.floatWindow.rootViewController = [[UIViewController alloc] init];
+        self.floatWindow.rootViewController.view.frame = self.floatWindow.bounds;
+        self.floatWindow.rootViewController.view.hidden = NO;
+    });
 }
 
 - (void)showFloater {
-    self.floatWindow.hidden = NO;
-    [self.floatWindow makeKeyAndVisible];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.floatWindow.hidden = NO;
+        [self.floatWindow makeKeyWindow];
+    });
 }
+
 - (void)hideFloater {
-    self.floatWindow.hidden = YES;
-}
-- (void)updateUI {
-    // 自定义UI刷新逻辑在这里
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.floatWindow.hidden = YES;
+    });
 }
 @end
 
-#pragma mark - Darwin通知回调
-static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+#pragma mark - Darwin通知回调（独立三条指令）
+static void cbStartRecord(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[FloaterManager sharedInstance] showFloater];
+        [[GestureRecorder sharedInstance] startRecord];
     });
 }
-static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+static void cbStopRecord(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[FloaterManager sharedInstance] hideFloater];
+        [[GestureRecorder sharedInstance] stopRecordAndSaveWithName:@"default"];
     });
 }
-static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+static void cbPlay(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[FloaterManager sharedInstance] updateUI];
-    });
-}
-
-static void GestureNotifyCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSDictionary *info = (__bridge NSDictionary *)userInfo;
-        NSString *cmd = info[@"cmd"];
-        if ([cmd isEqualToString:@"startRecord"]) {
-            [[GestureRecorder sharedInstance] startRecord];
-        } else if ([cmd isEqualToString:@"stopRecord"]) {
-            [[GestureRecorder sharedInstance] stopRecordAndSaveWithName:@"default"];
-        } else if ([cmd isEqualToString:@"play"]) {
-            [[GestureRecorder sharedInstance] playGestureWithName:@"default"];
-        }
+        [[GestureRecorder sharedInstance] playGestureWithName:@"default"];
     });
 }
 
-#pragma mark - Tweak Constructor
-__attribute__((constructor)) static void initFloater() {
-    CFNotificationCenterRef center = CFNotificationCenterGetDarwinNotifyCenter();
-    CFNotificationCenterAddObserver(center, NULL, showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(center, NULL, hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(center, NULL, updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+#pragma mark - Tweak入口
+__attribute__((constructor)) static void tweakMain() {
+    CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
 
-    CFNotificationCenterAddObserver(center, NULL, GestureNotifyCallback, CFSTR("com.sunny.gesturecontrol"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    // 注册三个独立指令通知
+    CFNotificationCenterAddObserver(nc, NULL, cbStartRecord, CFSTR("com.sunny.gesturecontrol.start"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(nc, NULL, cbStopRecord, CFSTR("com.sunny.gesturecontrol.stop"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(nc, NULL, cbPlay, CFSTR("com.sunny.gesturecontrol.play"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    // ✅ 动态加载GraphicsServices符号
     loadGSSymbol();
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 直接初始化悬浮球，无延时
+    dispatch_async(dispatch_get_main_queue(), ^{
         [[FloaterManager sharedInstance] setup];
     });
 }
