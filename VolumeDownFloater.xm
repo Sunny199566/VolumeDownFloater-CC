@@ -4,6 +4,7 @@
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <math.h>
 
 // ================= IOKit 类型与常量定义 =================
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -20,20 +21,18 @@ typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemCl
 typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 
-// 使用更稳定的底层事件创建函数
+// 使用最标准的底层事件创建函数
 typedef IOHIDEventRef (*IOHIDEventCreateDigitizerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, Boolean);
 
 typedef int (*IOHIDEventGetType_t)(IOHIDEventRef);
 typedef int64_t (*IOHIDEventGetIntegerValue_t)(IOHIDEventRef, uint32_t);
 typedef double (*IOHIDEventGetFloatValue_t)(IOHIDEventRef, uint32_t);
-typedef void (*IOHIDEventSetIntegerValue_t)(IOHIDEventRef, uint32_t, int64_t);
 
 #define kIOHIDEventTypeDigitizer 11
 #define kIOHIDEventFieldDigitizerX 0x2d
 #define kIOHIDEventFieldDigitizerY 0x2e
 #define kIOHIDEventFieldDigitizerIndex 0x2b
 #define kIOHIDEventFieldDigitizerEventMask 0x2f
-#define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x3c
 #define kIOHIDDigitizerEventRange (1 << 0)
 #define kIOHIDDigitizerEventTouch (1 << 1)
 #define kIOHIDDigitizerTransducerTypeFinger 2
@@ -136,7 +135,6 @@ void simulateVolumeDown(void) {
 @property (nonatomic, assign) NSInteger repeatCount;
 @property (nonatomic, assign) double interval;
 @property (nonatomic, assign) NSInteger currentLoop;
-@property (nonatomic, strong) dispatch_queue_t playQueue;
 @property (nonatomic, strong) NSMutableSet *activeFingers;
 + (instancetype)shared;
 - (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval;
@@ -237,12 +235,20 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 
 
 // ================= 回放器实现 =================
-// 修复：使用全局静态 Client 和 函数指针，避免频繁释放导致 SpringBoard 崩溃
 static IOHIDEventSystemClientRef gPlayClient = NULL;
 static IOHIDEventCreateDigitizerEvent_t gCreateDigitizerEvent = NULL;
 static IOHIDEventSystemClientDispatchEvent_t gDispatchEvent = NULL;
-static IOHIDEventSetIntegerValue_t gSetIntValue = NULL;
 static void *gPlayHandle = NULL;
+
+void setupPlayHID() {
+    if (gPlayClient) return;
+    gPlayHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!gPlayHandle) return;
+    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(gPlayHandle, "IOHIDEventSystemClientCreate");
+    gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(gPlayHandle, "IOHIDEventSystemClientDispatchEvent");
+    gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(gPlayHandle, "IOHIDEventCreateDigitizerEvent");
+    if (create) gPlayClient = create(kCFAllocatorDefault);
+}
 
 @implementation VDFGesturePlayer
 + (instancetype)shared {
@@ -254,26 +260,14 @@ static void *gPlayHandle = NULL;
 
 - (instancetype)init {
     if (self = [super init]) {
-        _playQueue = dispatch_queue_create("vdf.gesture.play", DISPATCH_QUEUE_SERIAL);
         _activeFingers = [NSMutableSet set];
     }
     return self;
 }
 
-- (void)setupHID {
-    if (gPlayClient) return;
-    gPlayHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!gPlayHandle) return;
-    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(gPlayHandle, "IOHIDEventSystemClientCreate");
-    gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(gPlayHandle, "IOHIDEventSystemClientDispatchEvent");
-    gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(gPlayHandle, "IOHIDEventCreateDigitizerEvent");
-    gSetIntValue = (IOHIDEventSetIntegerValue_t)dlsym(gPlayHandle, "IOHIDEventSetIntegerValue");
-    if (create) gPlayClient = create(kCFAllocatorDefault);
-}
-
 - (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval {
     if (self.playing) return;
-    [self setupHID]; // 初始化注入环境
+    setupPlayHID();
     self.script = script;
     self.speed = MAX(0.1, speed);
     self.repeatCount = repeat;
@@ -283,8 +277,9 @@ static void *gPlayHandle = NULL;
     [self startLoop];
 }
 
+// 彻底修复：全部放在主线程调度，避免多线程冲突导致注销
 - (void)startLoop {
-    dispatch_async(self.playQueue, ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         if (!self.playing) return;
         NSArray *events = self.script[@"events"];
         if (!events.count) { [self finish]; return; }
@@ -301,9 +296,10 @@ static void *gPlayHandle = NULL;
             NSDictionary *e = events[idx++];
             double t = [e[@"t"] doubleValue] / 1000.0;
             double delay = (t - lastT) / weakSelf.speed;
+            if (delay < 0.01) delay = 0.01; // 最小 10ms 间隔，保护系统
             lastT = t;
 
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), weakSelf.playQueue, ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (!weakSelf.playing) return;
                 [weakSelf sendTouch:[e[@"id"] intValue]
                                   x:[e[@"x"] doubleValue]
@@ -317,22 +313,22 @@ static void *gPlayHandle = NULL;
 }
 
 - (void)finishLoop {
-    self.currentLoop++;
-    if (self.repeatCount > 0 && self.currentLoop >= self.repeatCount) {
-        [self finish];
-        return;
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.interval * NSEC_PER_SEC)), self.playQueue, ^{
-        if (self.playing) [self startLoop];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.currentLoop++;
+        if (self.repeatCount > 0 && self.currentLoop >= self.repeatCount) {
+            [self finish];
+            return;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.interval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (self.playing) [self startLoop];
+        });
     });
 }
 
 - (void)finish {
-    dispatch_sync(self.playQueue, ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         [self releaseAllFingers];
         self.playing = NO;
-    });
-    dispatch_async(dispatch_get_main_queue(), ^{
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
         fm.window.hidden = NO;
@@ -341,11 +337,9 @@ static void *gPlayHandle = NULL;
 
 - (void)stop {
     if (!self.playing) return;
-    dispatch_sync(self.playQueue, ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         self.playing = NO;
         [self releaseAllFingers];
-    });
-    dispatch_async(dispatch_get_main_queue(), ^{
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
         fm.window.hidden = NO;
@@ -361,16 +355,17 @@ static void *gPlayHandle = NULL;
 }
 
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
-    int finger = 8 + (originalFinger % 2); // 隔离真实手指
+    int finger = 8 + (originalFinger % 2); 
     if (!gPlayClient || !gCreateDigitizerEvent || !gDispatchEvent) return;
+
+    // 核心修复：过滤非法坐标，防止内核崩溃
+    if (isnan(x) || isinf(x) || x < 0) x = 0;
+    if (isnan(y) || isinf(y) || y < 0) y = 0;
 
     BOOL down = [phase isEqualToString:@"down"];
     BOOL up = [phase isEqualToString:@"up"];
     
-    uint32_t eventMask = kIOHIDDigitizerEventTouch;
-    if (down) eventMask |= kIOHIDDigitizerEventRange;
-    if (up) eventMask = 0;
-    
+    uint32_t eventMask = kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange;
     Boolean range = !up;
     Boolean touch = !up;
 
@@ -392,7 +387,6 @@ static void *gPlayHandle = NULL;
                                   touch,
                                   0);
     if (ev) {
-        if (gSetIntValue) gSetIntValue(ev, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
         gDispatchEvent(gPlayClient, ev);
         CFRelease(ev);
     }
@@ -931,7 +925,6 @@ static void *gPlayHandle = NULL;
         }]];
     }
     
-    // === 新增：删除脚本入口 ===
     [sheet addAction:[UIAlertAction actionWithTitle:@"❌ 删除脚本" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
         [self showDeleteScriptList];
     }]];
@@ -941,7 +934,6 @@ static void *gPlayHandle = NULL;
     [topVC presentViewController:sheet animated:YES completion:nil];
 }
 
-// === 新增：删除脚本列表 ===
 - (void)showDeleteScriptList {
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self gestureDir] error:nil];
     NSMutableArray *jsonFiles = [NSMutableArray array];
