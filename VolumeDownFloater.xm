@@ -8,7 +8,7 @@
 
 #pragma mark - GSEvent动态加载Hook定义
 static void (*orig_GSEventSendEvent)(void *event);
-static void (*p_GSEventSendEvent)(void *event);
+static void *p_GSEventSendEvent_ptr;
 
 /// 根据iOS17.0 GSEvent结构体解析触摸点，生成GesturePoint数组
 static NSArray<GesturePoint *> * parseMultiGSEvent(void *event) {
@@ -53,9 +53,9 @@ static void hooked_GSEventSendEvent(void *event) {
 static void loadGSSymbol() {
     void *gsLib = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices", RTLD_LAZY);
     if (!gsLib) return;
-    p_GSEventSendEvent = dlsym(gsLib, "_GSEventSendEvent");
-    if (p_GSEventSendEvent) {
-        MSHookFunction(p_GSEventSendEvent, (void*)hooked_GSEventSendEvent, (void**)&orig_GSEventSendEvent);
+    p_GSEventSendEvent_ptr = dlsym(gsLib, "_GSEventSendEvent");
+    if (p_GSEventSendEvent_ptr) {
+        MSHookFunction(p_GSEventSendEvent_ptr, (void*)hooked_GSEventSendEvent, (void**)&orig_GSEventSendEvent);
     }
 }
 
@@ -91,7 +91,7 @@ static void loadGSSymbol() {
     self.floaterBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
     self.floaterBtn.layer.cornerRadius = 30;
     [self.floaterBtn setTitle:@"🔊" forState:UIControlStateNormal];
-    [self.floatWindow addSubview:self.floaterBtn];
+    self.floatWindow addSubview:self.floaterBtn];
     self.floatWindow.rootViewController = [[UIViewController alloc] init];
 }
 
@@ -147,7 +147,7 @@ __attribute__((constructor)) static void initFloater() {
 
     CFNotificationCenterAddObserver(center, NULL, GestureNotifyCallback, CFSTR("com.sunny.gesturecontrol"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    // ✅ 动态加载GraphicsServices符号（核心修复点）
+    // ✅ 动态加载GraphicsServices符号
     loadGSSymbol();
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
