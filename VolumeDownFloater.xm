@@ -13,7 +13,10 @@ typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
 typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
 
-typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemClientRef, void *, void *, void *);
+// 修正：回调函数指针类型
+typedef void (*IOHIDEventSystemClientEventCallback_t)(void *target, void *refcon, IOHIDEventSystemClientRef client, IOHIDEventRef event);
+typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemClientRef, IOHIDEventSystemClientEventCallback_t, void *, void *);
+
 typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef IOHIDEventRef (*IOHIDEventCreateDigitizerFingerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, uint32_t);
@@ -52,7 +55,14 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// ================= 穿透窗口 =================
+// ================= 前向声明与穿透窗口 =================
+@class FloaterManager;
+@interface FloaterManager : NSObject
++ (instancetype)sharedInstance;
+@property (nonatomic, strong) UIWindow *window;
+@property (nonatomic, assign) NSInteger gestureState;
+@end
+
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -297,7 +307,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 }
 
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
-    // 独立手指 ID (8, 9)，避免干扰真实手指 (0~4)
     int finger = 8 + (originalFinger % 2);
 
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
@@ -436,7 +445,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
         
-        // 【修改点】：单击直接运行脚本，无延迟
         [self.floatBtn addTarget:self action:@selector(handleSingleTap) forControlEvents:UIControlEventTouchUpInside];
         
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
@@ -614,7 +622,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     [self clampCurrentPosition];
 }
 
-// 长按菜单：保留折叠，增加录制、选择、设置
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
     
@@ -751,7 +758,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     });
 }
 
-// 单击直接运行脚本，若没有脚本则保留原本模拟音量下键
 - (void)handleSingleTap {
     if (self.window.hidden) return;
     if (self.gestureState == 1) { [self stopRecordingAndSave]; return; }
@@ -908,7 +914,6 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     self.window.hidden = NO;
 }
 
-// 保留原本的点击震动和模拟音量
 - (void)playClickHapticAndVolumeDown {
     NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
     BOOL isCustom = [customStr isEqualToString:@"1"];
