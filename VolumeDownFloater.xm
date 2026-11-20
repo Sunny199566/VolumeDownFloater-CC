@@ -6,6 +6,7 @@
 #import <objc/message.h>
 #import "GestureRecord.h"
 #import <GraphicsServices/GraphicsServices.h>
+#import <substrate.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -57,7 +58,7 @@ NSArray* parseMultiGSEvent(void *event) {
         uintptr_t singleTouch = (uintptr_t)touchesBase + i * 0x28;
         GesturePoint *p = [[GesturePoint alloc] init];
         p.fingerId = *(int*)(singleTouch + 0x00);
-        p.phase = *(int*)(singleTouch + 0x04);
+        p.phase = (TouchPhase)*(int*)(singleTouch + 0x04);
         p.x = *(float*)(singleTouch + 0x08);
         p.y = *(float*)(singleTouch + 0x0C);
         [touchList addObject:p];
@@ -69,7 +70,7 @@ static void hooked_GSEventSendEvent(void *event) {
     orig_GSEventSendEvent(event);
     if([GestureRecorder sharedInstance].isRecording) {
         NSArray *multiTouches = parseMultiGSEvent(event);
-        [[GestureRecorder sharedInstance] receiveMultiTouch:multiTouches];
+        [[GestureRecorder sharedInstance] receiveTouchPoints:multiTouches];
     }
 }
 
@@ -601,13 +602,8 @@ __attribute__((constructor)) static void initFloater() {
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    // ✅ GSEvent Hook + 回放方法绑定
+    // ✅ GSEvent Hook
     MSHookFunction(MSFindSymbol(NULL, "_GSEventSendEvent"), (void*)hooked_GSEventSendEvent, (void**)&orig_GSEventSendEvent);
-    class_addMethod([GestureRecorder class], @selector(sendReplayedTouch:), imp_implementationWithBlock(^(GestureRecorder *_self, GesturePoint *pt){
-        void *newEvent = GSEventCreate();
-        GSEventAddTouchPoint(newEvent, (int)pt.fingerId, (int)pt.phase, pt.x, pt.y);
-        GSEventSendEvent(newEvent);
-    }), "v@:@");
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[FloaterManager sharedInstance] setup]; });
 }
