@@ -130,6 +130,7 @@ void simulateVolumeDown(void) {
 
 @interface VDFGesturePlayer : NSObject
 @property (nonatomic, assign) BOOL playing;
+@property (nonatomic, assign) BOOL isStopping; // 新增停止锁，防重复stop
 @property (nonatomic, strong) NSDictionary *script;
 @property (nonatomic, assign) double speed;
 @property (nonatomic, assign) NSInteger repeatCount;
@@ -246,24 +247,26 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 - (instancetype)init {
     if (self = [super init]) {
         _activeFingers = [NSMutableSet set];
+        _isStopping = NO;
     }
     return self;
 }
 
 - (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval {
-    if (self.playing) return;
+    if (self.playing || self.isStopping) return;
     self.script = script;
     self.speed = MAX(0.1, speed);
     self.repeatCount = repeat;
     self.interval = MAX(0, interval);
     self.currentLoop = 0;
     self.playing = YES;
+    self.isStopping = NO;
     [self startLoop];
 }
 
 - (void)startLoop {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!self.playing) return;
+        if (!self.playing || self.isStopping) return;
         NSArray *events = self.script[@"events"];
         if (!events.count) { [self finish]; return; }
 
@@ -272,7 +275,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
         __weak typeof(self) weakSelf = self;
 
         void (^step)(void) = ^{
-            if (!weakSelf.playing || idx >= events.count) {
+            if (!weakSelf.playing || weakSelf.isStopping || idx >= events.count) {
                 if (idx >= events.count) [weakSelf finishLoop];
                 return;
             }
@@ -283,7 +286,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
             lastT = t;
 
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if (!weakSelf.playing) return;
+                if (!weakSelf.playing || weakSelf.isStopping) return;
                 [weakSelf sendTouch:[e[@"id"] intValue]
                                   x:[e[@"x"] doubleValue]
                                   y:[e[@"y"] doubleValue]
@@ -297,35 +300,41 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 
 - (void)finishLoop {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.isStopping) return;
         self.currentLoop++;
         if (self.repeatCount > 0 && self.currentLoop >= self.repeatCount) {
             [self finish];
             return;
         }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.interval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (self.playing) [self startLoop];
+            if (self.playing && !self.isStopping) [self startLoop];
         });
     });
 }
 
 - (void)finish {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.isStopping) return;
+        self.isStopping = YES;
         [self releaseAllFingers];
         self.playing = NO;
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
         fm.window.hidden = NO;
+        self.isStopping = NO;
     });
 }
 
 - (void)stop {
-    if (!self.playing) return;
+    if (!self.playing || self.isStopping) return;
     dispatch_async(dispatch_get_main_queue(), ^{
+        self.isStopping = YES;
         self.playing = NO;
         [self releaseAllFingers];
         FloaterManager *fm = [FloaterManager sharedInstance];
         fm.gestureState = 0;
         fm.window.hidden = NO;
+        self.isStopping = NO;
     });
 }
 
@@ -337,7 +346,7 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     [self.activeFingers removeAllObjects];
 }
 
-// 核心修复：独立分发，延迟释放，彻底解决野指针导致的安全模式
+// ==========【重点修复】移除延迟释放！立刻close handle/client，彻底解决野指针崩溃 ==========
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
     int finger = 8 + (originalFinger % 2); 
     
@@ -391,12 +400,9 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
         dispatch(client, ev);
         CFRelease(ev);
     }
-    
-    // 核心修复：延迟 1 秒后再释放 Client 和关闭动态库，防止系统异步处理时内存已被销毁导致崩溃
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        CFRelease(client);
-        dlclose(handle);
-    });
+    // ❌ 删除原来dispatch_after延迟释放，这里立刻释放！
+    CFRelease(client);
+    dlclose(handle);
 
     if (up) [self.activeFingers removeObject:@(finger)];
 }
@@ -841,19 +847,25 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
     });
 }
 
+// ==========【单击逻辑修复：录制/播放状态点击直接停止；闲置状态运行选中脚本，无脚本则音量减】==========
 - (void)handleSingleTap {
     if (self.window.hidden) return;
-    if (self.gestureState == 1) { [self stopRecordingAndSave]; return; }
-    if (self.gestureState == 2) { [self stopPlaying]; return; }
 
-    if (@available(iOS 10.0, *)) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [gen impactOccurred];
+    // 状态1：正在录制 → 停止录制保存
+    if (self.gestureState == 1) {
+        [self stopRecordingAndSave];
+        return;
+    }
+    // 状态2：正在回放 → 立刻停止回放
+    if (self.gestureState == 2) {
+        [self stopPlaying];
+        return;
     }
 
+    // 闲置状态：优先执行选中脚本，没有选中脚本就执行音量下调
     NSMutableDictionary *cfg = [self loadGestureConfig];
-    NSString *selected = cfg[@"selected"];
-    if (selected.length > 0) {
+    NSString *selectedScript = cfg[@"selected"];
+    if (selectedScript.length > 0) {
         [self runSelectedScript];
     } else {
         simulateVolumeDown();
