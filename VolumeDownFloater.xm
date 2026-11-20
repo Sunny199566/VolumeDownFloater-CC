@@ -4,6 +4,9 @@
 #import <mach/mach_time.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+// ==========【新增：手势模块头文件】==========
+#import "GestureRecord.h"
+#import <CoreFoundation/CoreFoundation.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
@@ -31,6 +34,27 @@ void simulateVolumeDown(void) {
     }
     dlclose(handle);
 }
+
+// ==========【新增：手势录制通知 + GSEvent Hook】==========
+static CFStringRef kGestureControlNotification = CFSTR("com.sunny.gesturecontrol");
+
+static void GestureNotifyCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    NSString *cmd = (__bridge NSString *)object;
+    if ([cmd isEqualToString:@"start"]) {
+        [[GestureRecorder sharedInstance] startRecord];
+    } else if ([cmd isEqualToString:@"stop"]) {
+        [[GestureRecorder sharedInstance] stopRecordAndSaveWithName:@"default_gesture"];
+    } else if ([cmd isEqualToString:@"play"]) {
+        [[GestureRecorder sharedInstance] playGestureWithName:@"default_gesture"];
+    }
+}
+
+static void (*orig_GSEventSendEvent)(void *event);
+void hooked_GSEventSendEvent(void *event) {
+    // iOS17 GSEvent坐标解析代码后续补在这里
+    orig_GSEventSendEvent(event);
+}
+// =====================================================
 
 // 穿透窗口，防止遮挡桌面
 @interface PassThroughWindow : UIWindow
@@ -557,6 +581,11 @@ static void hideFloater(CFNotificationCenterRef center, void *observer, CFString
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
 __attribute__((constructor)) static void initFloater() {
+    // ==========【新增：手势模块初始化注册】==========
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, GestureNotifyCallback, CFSTR("com.sunny.gesturecontrol"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    MSHookFunction((void*)MSFindSymbol(NULL,"_GSEventSendEvent"), (void*)hooked_GSEventSendEvent, (void**)&orig_GSEventSendEvent);
+    // ===============================================
+
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)showFloater, CFSTR("com.yourname.volumedownfloater/show"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)hideFloater, CFSTR("com.yourname.volumedownfloater/hide"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)updateUI, CFSTR("com.yourname.volumedownfloater/update_ui"), NULL, CFNotificationSuspensionBehaviorCoalesce);
