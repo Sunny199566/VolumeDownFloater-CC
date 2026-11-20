@@ -21,7 +21,7 @@ typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemCl
 typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
 
-// 使用最标准的底层事件创建函数
+// 使用最标准的 Digitizer 事件
 typedef IOHIDEventRef (*IOHIDEventCreateDigitizerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, Boolean);
 
 typedef int (*IOHIDEventGetType_t)(IOHIDEventRef);
@@ -235,19 +235,24 @@ static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClient
 
 
 // ================= 回放器实现 =================
+// 全局永远只加载一次，绝不卸载
 static IOHIDEventSystemClientRef gPlayClient = NULL;
 static IOHIDEventCreateDigitizerEvent_t gCreateDigitizerEvent = NULL;
 static IOHIDEventSystemClientDispatchEvent_t gDispatchEvent = NULL;
-static void *gPlayHandle = NULL;
 
 void setupPlayHID() {
-    if (gPlayClient) return;
-    gPlayHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!gPlayHandle) return;
-    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(gPlayHandle, "IOHIDEventSystemClientCreate");
-    gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(gPlayHandle, "IOHIDEventSystemClientDispatchEvent");
-    gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(gPlayHandle, "IOHIDEventCreateDigitizerEvent");
-    if (create) gPlayClient = create(kCFAllocatorDefault);
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+        if (!handle) return;
+        IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
+        gDispatchEvent = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
+        gCreateDigitizerEvent = (IOHIDEventCreateDigitizerEvent_t)dlsym(handle, "IOHIDEventCreateDigitizerEvent");
+        if (create) {
+            gPlayClient = create(kCFAllocatorDefault);
+        }
+        // 注意：这里故意不调用 dlclose，防止底层代码被卸载导致系统崩溃
+    });
 }
 
 @implementation VDFGesturePlayer
@@ -277,7 +282,6 @@ void setupPlayHID() {
     [self startLoop];
 }
 
-// 彻底修复：全部放在主线程调度，避免多线程冲突导致注销
 - (void)startLoop {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self.playing) return;
@@ -296,7 +300,7 @@ void setupPlayHID() {
             NSDictionary *e = events[idx++];
             double t = [e[@"t"] doubleValue] / 1000.0;
             double delay = (t - lastT) / weakSelf.speed;
-            if (delay < 0.01) delay = 0.01; // 最小 10ms 间隔，保护系统
+            if (delay < 0.015) delay = 0.015; // 强制最小 15ms 间隔
             lastT = t;
 
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -355,17 +359,18 @@ void setupPlayHID() {
 }
 
 - (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
-    int finger = 8 + (originalFinger % 2); 
-    if (!gPlayClient || !gCreateDigitizerEvent || !gDispatchEvent) return;
+    // 映射手指 ID，避免干扰真实手指 (真实通常是 0~4)
+    int finger = 8 + (originalFinger % 4); 
 
-    // 核心修复：过滤非法坐标，防止内核崩溃
-    if (isnan(x) || isinf(x) || x < 0) x = 0;
-    if (isnan(y) || isinf(y) || y < 0) y = 0;
+    // 过滤非法的坐标
+    if (isnan(x) || isinf(x) || x < 0 || x > 5000) x = 100;
+    if (isnan(y) || isinf(y) || y < 0 || y > 5000) y = 100;
+
+    if (!gPlayClient || !gCreateDigitizerEvent || !gDispatchEvent) return;
 
     BOOL down = [phase isEqualToString:@"down"];
     BOOL up = [phase isEqualToString:@"up"];
     
-    uint32_t eventMask = kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange;
     Boolean range = !up;
     Boolean touch = !up;
 
@@ -374,9 +379,9 @@ void setupPlayHID() {
     IOHIDEventRef ev = gCreateDigitizerEvent(kCFAllocatorDefault,
                                   mach_absolute_time(),
                                   kIOHIDDigitizerTransducerTypeFinger,
-                                  finger,
-                                  0,
-                                  eventMask,
+                                  0, // index
+                                  finger, // identity
+                                  kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange, // eventMask
                                   0,
                                   (IOFixed)(x * 65536.0),
                                   (IOFixed)(y * 65536.0),
@@ -1004,10 +1009,14 @@ void setupPlayHID() {
 
     self.gestureState = 2;
     self.window.hidden = YES; 
-    [[VDFGesturePlayer shared] playScript:script
-                                    speed:[cfg[@"speed"] doubleValue]
-                                   repeat:[cfg[@"repeat"] integerValue]
-                                 interval:[cfg[@"interval"] doubleValue]];
+    
+    // 延迟 0.3 秒再开始执行注入，防止你点击悬浮球的手指与注入的手指产生冲突
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[VDFGesturePlayer shared] playScript:script
+                                        speed:[cfg[@"speed"] doubleValue]
+                                       repeat:[cfg[@"repeat"] integerValue]
+                                     interval:[cfg[@"interval"] doubleValue]];
+    });
 }
 
 - (void)stopPlaying {
