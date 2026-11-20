@@ -5,11 +5,31 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+// ================= IOKit 类型与常量定义 =================
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef CFTypeRef IOHIDEventSystemClientRef;
+
 typedef IOHIDEventRef (*IOHIDEventCreateKeyboardEvent_t)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
 typedef IOHIDEventSystemClientRef (*IOHIDEventSystemClientCreate_t)(CFAllocatorRef);
 typedef void (*IOHIDEventSystemClientDispatchEvent_t)(IOHIDEventSystemClientRef, IOHIDEventRef);
+
+typedef void (*IOHIDEventSystemClientRegisterEventCallback_t)(IOHIDEventSystemClientRef, void *, void *, void *);
+typedef void (*IOHIDEventSystemClientScheduleWithRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
+typedef void (*IOHIDEventSystemClientUnscheduleFromRunLoop_t)(IOHIDEventSystemClientRef, CFRunLoopRef, CFStringRef);
+typedef IOHIDEventRef (*IOHIDEventCreateDigitizerFingerEvent_t)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t, Boolean, Boolean, uint32_t);
+typedef int (*IOHIDEventGetType_t)(IOHIDEventRef);
+typedef int64_t (*IOHIDEventGetIntegerValue_t)(IOHIDEventRef, uint32_t);
+typedef double (*IOHIDEventGetFloatValue_t)(IOHIDEventRef, uint32_t);
+typedef void (*IOHIDEventSetIntegerValue_t)(IOHIDEventRef, uint32_t, int64_t);
+
+#define kIOHIDEventTypeDigitizer 11
+#define kIOHIDEventFieldDigitizerX 0x2d
+#define kIOHIDEventFieldDigitizerY 0x2e
+#define kIOHIDEventFieldDigitizerIndex 0x2b
+#define kIOHIDEventFieldDigitizerEventMask 0x2f
+#define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x3c
+#define kIOHIDDigitizerEventRange (1 << 0)
+#define kIOHIDDigitizerEventTouch (1 << 1)
 
 void simulateVolumeDown(void) {
     void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
@@ -32,7 +52,7 @@ void simulateVolumeDown(void) {
     dlclose(handle);
 }
 
-// 穿透窗口，防止遮挡桌面
+// ================= 穿透窗口 =================
 @interface PassThroughWindow : UIWindow
 @end
 @implementation PassThroughWindow
@@ -62,6 +82,267 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// ================= 录制器 =================
+@interface VDFGestureRecorder : NSObject
+@property (nonatomic, assign) BOOL recording;
+@property (nonatomic, strong) NSMutableArray *events;
+@property (nonatomic, assign) NSTimeInterval startTime;
++ (instancetype)shared;
+- (void)start;
+- (NSDictionary *)stopAndBuildScript;
+@end
+
+static IOHIDEventSystemClientRef gRecordClient = NULL;
+static void *gRecordHandle = NULL;
+static VDFGestureRecorder *gRecorder = nil;
+
+static void VDFRecordCallback(void *target, void *refcon, IOHIDEventSystemClientRef client, IOHIDEventRef event) {
+    if (!gRecorder || !gRecorder.recording || !gRecordHandle) return;
+    
+    IOHIDEventGetType_t getType = (IOHIDEventGetType_t)dlsym(gRecordHandle, "IOHIDEventGetType");
+    IOHIDEventGetIntegerValue_t getInt = (IOHIDEventGetIntegerValue_t)dlsym(gRecordHandle, "IOHIDEventGetIntegerValue");
+    IOHIDEventGetFloatValue_t getFloat = (IOHIDEventGetFloatValue_t)dlsym(gRecordHandle, "IOHIDEventGetFloatValue");
+    if (!getType || !getInt || !getFloat) return;
+    
+    if (getType(event) != kIOHIDEventTypeDigitizer) return;
+
+    int finger = (int)getInt(event, kIOHIDEventFieldDigitizerIndex);
+    double x = getFloat(event, kIOHIDEventFieldDigitizerX);
+    double y = getFloat(event, kIOHIDEventFieldDigitizerY);
+    uint32_t mask = (uint32_t)getInt(event, kIOHIDEventFieldDigitizerEventMask);
+
+    BOOL touch = (mask & kIOHIDDigitizerEventTouch) != 0;
+    BOOL range = (mask & kIOHIDDigitizerEventRange) != 0;
+    NSString *phase = nil;
+    if (touch && range) phase = @"down";
+    else if (!touch && !range) phase = @"up";
+    else phase = @"move";
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (gRecorder.startTime == 0) gRecorder.startTime = now;
+    double t = (now - gRecorder.startTime) * 1000.0;
+
+    @synchronized (gRecorder.events) {
+        [gRecorder.events addObject:@{@"t": @(t), @"id": @(finger), @"phase": phase, @"x": @(x), @"y": @(y)}];
+    }
+}
+
+@implementation VDFGestureRecorder
++ (instancetype)shared { 
+    static VDFGestureRecorder *o; 
+    static dispatch_once_t t; 
+    dispatch_once(&t, ^{ o = [VDFGestureRecorder new]; }); 
+    return o; 
+}
+- (void)start {
+    if (self.recording) return;
+    self.recording = YES;
+    self.events = [NSMutableArray array];
+    self.startTime = 0;
+    gRecorder = self;
+
+    gRecordHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!gRecordHandle) return;
+
+    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(gRecordHandle, "IOHIDEventSystemClientCreate");
+    IOHIDEventSystemClientRegisterEventCallback_t reg = (IOHIDEventSystemClientRegisterEventCallback_t)dlsym(gRecordHandle, "IOHIDEventSystemClientRegisterEventCallback");
+    IOHIDEventSystemClientScheduleWithRunLoop_t sched = (IOHIDEventSystemClientScheduleWithRunLoop_t)dlsym(gRecordHandle, "IOHIDEventSystemClientScheduleWithRunLoop");
+    
+    if (create && reg && sched) {
+        gRecordClient = create(kCFAllocatorDefault);
+        if (gRecordClient) {
+            reg(gRecordClient, VDFRecordCallback, NULL, NULL);
+            sched(gRecordClient, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+        }
+    }
+}
+
+- (NSDictionary *)stopAndBuildScript {
+    if (!self.recording) return nil;
+    self.recording = NO;
+    gRecorder = nil;
+
+    if (gRecordClient && gRecordHandle) {
+        IOHIDEventSystemClientUnscheduleFromRunLoop_t unsched = (IOHIDEventSystemClientUnscheduleFromRunLoop_t)dlsym(gRecordHandle, "IOHIDEventSystemClientUnscheduleFromRunLoop");
+        if (unsched) unsched(gRecordClient, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+        CFRelease(gRecordClient);
+        gRecordClient = NULL;
+    }
+    if (gRecordHandle) {
+        dlclose(gRecordHandle);
+        gRecordHandle = NULL;
+    }
+
+    CGSize p = [UIScreen mainScreen].bounds.size;
+    return @{
+        @"version": @1,
+        @"screen": @{@"w": @(p.width), @"h": @(p.height), @"scale": @([UIScreen mainScreen].scale)},
+        @"events": self.events ?: @[]
+    };
+}
+@end
+
+// ================= 回放器 =================
+@interface VDFGesturePlayer : NSObject
+@property (nonatomic, assign) BOOL playing;
+@property (nonatomic, strong) NSDictionary *script;
+@property (nonatomic, assign) double speed;
+@property (nonatomic, assign) NSInteger repeatCount;
+@property (nonatomic, assign) double interval;
+@property (nonatomic, assign) NSInteger currentLoop;
+@property (nonatomic, strong) dispatch_queue_t playQueue;
+@property (nonatomic, strong) NSMutableSet *activeFingers;
++ (instancetype)shared;
+- (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval;
+- (void)stop;
+@end
+
+@implementation VDFGesturePlayer
++ (instancetype)shared {
+    static VDFGesturePlayer *o;
+    static dispatch_once_t t;
+    dispatch_once(&t, ^{ o = [VDFGesturePlayer new]; });
+    return o;
+}
+
+- (instancetype)init {
+    if (self = [super init]) {
+        _playQueue = dispatch_queue_create("vdf.gesture.play", DISPATCH_QUEUE_SERIAL);
+        _activeFingers = [NSMutableSet set];
+    }
+    return self;
+}
+
+- (void)playScript:(NSDictionary *)script speed:(double)speed repeat:(NSInteger)repeat interval:(double)interval {
+    if (self.playing) return;
+    self.script = script;
+    self.speed = MAX(0.1, speed);
+    self.repeatCount = repeat;
+    self.interval = MAX(0, interval);
+    self.currentLoop = 0;
+    self.playing = YES;
+    [self startLoop];
+}
+
+- (void)startLoop {
+    dispatch_async(self.playQueue, ^{
+        if (!self.playing) return;
+        NSArray *events = self.script[@"events"];
+        if (!events.count) { [self finish]; return; }
+
+        __block NSTimeInterval lastT = 0;
+        __block NSInteger idx = 0;
+        __weak typeof(self) weakSelf = self;
+
+        void (^step)(void) = ^{
+            if (!weakSelf.playing || idx >= events.count) {
+                if (idx >= events.count) [weakSelf finishLoop];
+                return;
+            }
+            NSDictionary *e = events[idx++];
+            double t = [e[@"t"] doubleValue] / 1000.0;
+            double delay = (t - lastT) / weakSelf.speed;
+            lastT = t;
+
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(delay, 0) * NSEC_PER_SEC)), weakSelf.playQueue, ^{
+                if (!weakSelf.playing) return;
+                [weakSelf sendTouch:[e[@"id"] intValue]
+                                  x:[e[@"x"] doubleValue]
+                                  y:[e[@"y"] doubleValue]
+                              phase:e[@"phase"]];
+                step();
+            });
+        };
+        step();
+    });
+}
+
+- (void)finishLoop {
+    self.currentLoop++;
+    if (self.repeatCount > 0 && self.currentLoop >= self.repeatCount) {
+        [self finish];
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.interval * NSEC_PER_SEC)), self.playQueue, ^{
+        if (self.playing) [self startLoop];
+    });
+}
+
+- (void)finish {
+    [self releaseAllFingers];
+    self.playing = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FloaterManager *fm = [FloaterManager sharedInstance];
+        fm.gestureState = 0;
+        fm.window.hidden = NO;
+    });
+}
+
+- (void)stop {
+    self.playing = NO;
+    [self releaseAllFingers];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FloaterManager *fm = [FloaterManager sharedInstance];
+        fm.gestureState = 0;
+        fm.window.hidden = NO;
+    });
+}
+
+- (void)releaseAllFingers {
+    NSArray *fingers = [self.activeFingers allObjects];
+    for (NSNumber *n in fingers) {
+        [self sendTouch:n.intValue x:0 y:0 phase:@"up"];
+    }
+    [self.activeFingers removeAllObjects];
+}
+
+- (void)sendTouch:(int)originalFinger x:(double)x y:(double)y phase:(NSString *)phase {
+    // 独立手指 ID (8, 9)，避免干扰真实手指 (0~4)
+    int finger = 8 + (originalFinger % 2);
+
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!handle) return;
+    IOHIDEventSystemClientCreate_t create = (IOHIDEventSystemClientCreate_t)dlsym(handle, "IOHIDEventSystemClientCreate");
+    IOHIDEventSystemClientDispatchEvent_t dispatch = (IOHIDEventSystemClientDispatchEvent_t)dlsym(handle, "IOHIDEventSystemClientDispatchEvent");
+    IOHIDEventCreateDigitizerFingerEvent_t createEvent = (IOHIDEventCreateDigitizerFingerEvent_t)dlsym(handle, "IOHIDEventCreateDigitizerFingerEvent");
+    IOHIDEventSetIntegerValue_t setInt = (IOHIDEventSetIntegerValue_t)dlsym(handle, "IOHIDEventSetIntegerValue");
+    if (!create || !dispatch || !createEvent) { dlclose(handle); return; }
+
+    IOHIDEventSystemClientRef client = create(kCFAllocatorDefault);
+    if (!client) { dlclose(handle); return; }
+
+    BOOL down = [phase isEqualToString:@"down"];
+    BOOL up = [phase isEqualToString:@"up"];
+    Boolean range = down || (!up);
+    Boolean touch = !up;
+
+    if (down) [self.activeFingers addObject:@(finger)];
+
+    IOHIDEventRef ev = createEvent(kCFAllocatorDefault,
+                                  mach_absolute_time(),
+                                  finger,
+                                  0,
+                                  kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange,
+                                  (int32_t)(x * 65536.0),
+                                  (int32_t)(y * 65536.0),
+                                  0,
+                                  0,
+                                  range,
+                                  touch,
+                                  0);
+    if (ev) {
+        if (setInt) setInt(ev, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
+        dispatch(client, ev);
+        CFRelease(ev);
+    }
+    CFRelease(client);
+    dlclose(handle);
+
+    if (up) [self.activeFingers removeObject:@(finger)];
+}
+@end
+
+// ================= 悬浮窗管理器 =================
 @interface FloaterManager : NSObject
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) UIView *mainContainer; 
@@ -75,12 +356,15 @@ void simulateVolumeDown(void) {
 @property (strong, nonatomic) CHHapticEngine *hapticEngine; 
 @property (strong, nonatomic) NSTimer *timeTimer;
 @property (strong, nonatomic) NSTimer *orientationTimer; 
+@property (nonatomic, assign) NSInteger gestureState; // 0 idle, 1 recording, 2 playing
 
 + (instancetype)sharedInstance;
 - (void)setup;
 - (void)setVisibility:(BOOL)visible;
 - (void)updateUI;
 - (CGSize)getPortraitScreenSize;
+- (void)stopRecordingAndSave;
+- (void)stopPlaying;
 @end
 
 @implementation FloaterManager
@@ -123,6 +407,7 @@ void simulateVolumeDown(void) {
 
         self.lastSysAngle = 0;
         self.currentAngle = 0;
+        self.gestureState = 0;
 
         if (@available(iOS 13.0, *)) {
             if (CHHapticEngine.capabilitiesForHardware.supportsHaptics) {
@@ -150,7 +435,9 @@ void simulateVolumeDown(void) {
         self.floatBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
         self.floatBtn.layer.masksToBounds = YES;
         self.floatBtn.adjustsImageWhenHighlighted = NO;
-        [self.floatBtn addTarget:self action:@selector(handleTouchUpInside) forControlEvents:UIControlEventTouchUpInside];
+        
+        // 【修改点】：单击直接运行脚本，无延迟
+        [self.floatBtn addTarget:self action:@selector(handleSingleTap) forControlEvents:UIControlEventTouchUpInside];
         
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         panGesture.cancelsTouchesInView = NO; 
@@ -268,7 +555,6 @@ void simulateVolumeDown(void) {
     }
 }
 
-// 【核心修复】：动态边缘限制
 - (void)clampCurrentPosition {
     CGSize screenSize = [self getPortraitScreenSize]; 
     BOOL isRotated = fabs(self.currentAngle) > 0.1;
@@ -278,7 +564,6 @@ void simulateVolumeDown(void) {
     CGFloat centerX = 1000, centerY = 1000, margin = 5.0;
     
     if (isCollapsed) {
-        // 隐藏状态：只计算时间条的边界，允许拖到极限边缘
         CGFloat size = self.mainContainer.bounds.size.width;
         CGFloat labelW = isRotated ? 20 : size;
         CGFloat labelH = isRotated ? size : 20;
@@ -300,7 +585,6 @@ void simulateVolumeDown(void) {
         c.x = labelCenterX - rotatedOffset.x;
         c.y = labelCenterY - rotatedOffset.y;
     } else {
-        // 正常状态：计算球的边界
         CGFloat ballW = isRotated ? self.mainContainer.bounds.size.height : self.mainContainer.bounds.size.width;
         CGFloat ballH = isRotated ? self.mainContainer.bounds.size.width : self.mainContainer.bounds.size.height;
         
@@ -315,27 +599,47 @@ void simulateVolumeDown(void) {
     self.mainContainer.center = c;
 }
 
-// 悬浮球长按：折叠
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [gen impactOccurred];
-        
-        self.floatBtn.hidden = YES;
-        self.timeBottomLabel.hidden = NO; 
-        
-        if (!self.timeTimer) {
-            [self updateTimeText];
-            self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
-            self.timeTimer.tolerance = 0.5;
-        }
-        
-        // 切换为折叠状态后，重新计算边界，防止时间条出界
-        [self clampCurrentPosition];
+- (void)collapseFloater {
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [gen impactOccurred];
+    
+    self.floatBtn.hidden = YES;
+    self.timeBottomLabel.hidden = NO; 
+    
+    if (!self.timeTimer) {
+        [self updateTimeText];
+        self.timeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTimeText) userInfo:nil repeats:YES];
+        self.timeTimer.tolerance = 0.5;
     }
+    [self clampCurrentPosition];
 }
 
-// 时间条长按：展开
+// 长按菜单：保留折叠，增加录制、选择、设置
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"悬浮球菜单" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"折叠隐藏" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [self collapseFloater];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"录制手势" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [self startRecording];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"选择脚本" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [self showScriptList];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"脚本设置" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [self showScriptSettings];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
+    UIViewController *topVC = self.window.rootViewController;
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
+    [topVC presentViewController:sheet animated:YES completion:nil];
+}
+
 - (void)handleTimeLabelLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -349,8 +653,6 @@ void simulateVolumeDown(void) {
             [self.timeTimer invalidate];
             self.timeTimer = nil;
         }
-        
-        // 展开球后，重新计算边界，确保球被拉回屏幕内
         [self clampCurrentPosition];
     }
 }
@@ -449,9 +751,165 @@ void simulateVolumeDown(void) {
     });
 }
 
-- (void)handleTouchUpInside {
+// 单击直接运行脚本，若没有脚本则保留原本模拟音量下键
+- (void)handleSingleTap {
     if (self.window.hidden) return;
+    if (self.gestureState == 1) { [self stopRecordingAndSave]; return; }
+    if (self.gestureState == 2) { [self stopPlaying]; return; }
+
+    if (@available(iOS 10.0, *)) {
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [gen impactOccurred];
+    }
+
+    NSMutableDictionary *cfg = [self loadGestureConfig];
+    NSString *selected = cfg[@"selected"];
+    if (selected.length > 0) {
+        [self runSelectedScript];
+    } else {
+        simulateVolumeDown();
+    }
+}
+
+// ================= 手势脚本核心逻辑 =================
+- (NSString *)gestureDir {
+    NSString *dir = @"/var/mobile/Library/Preferences/VolumeDownFloater/gestures";
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
+- (NSString *)configPath {
+    return @"/var/mobile/Library/Preferences/VolumeDownFloater/gesture_config.plist";
+}
+
+- (NSMutableDictionary *)loadGestureConfig {
+    NSMutableDictionary *cfg = [NSMutableDictionary dictionaryWithContentsOfFile:[self configPath]];
+    if (!cfg) cfg = [NSMutableDictionary dictionary];
+    if (!cfg[@"selected"]) cfg[@"selected"] = @"";
+    if (!cfg[@"repeat"]) cfg[@"repeat"] = @1;      
+    if (!cfg[@"speed"]) cfg[@"speed"] = @1.0;     
+    if (!cfg[@"interval"]) cfg[@"interval"] = @0.2; 
+    return cfg;
+}
+
+- (void)saveGestureConfig:(NSDictionary *)cfg {
+    [cfg writeToFile:[self configPath] atomically:YES];
+}
+
+- (void)startRecording {
+    if (self.gestureState != 0) return;
+    self.gestureState = 1;
+    self.window.hidden = YES; 
+    [[VDFGestureRecorder shared] start];
+}
+
+- (void)stopRecordingAndSave {
+    if (self.gestureState != 1) return;
+    NSDictionary *script = [[VDFGestureRecorder shared] stopAndBuildScript];
+    self.gestureState = 0;
+    self.window.hidden = NO;
+    if (!script || ![script[@"events"] count]) return;
+
+    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+    [fmt setDateFormat:@"MMdd_HHmmss"];
+    NSString *name = [NSString stringWithFormat:@"script_%@", [fmt stringFromDate:[NSDate date]]];
     
+    NSString *path = [[self gestureDir] stringByAppendingPathComponent:[name stringByAppendingString:@".json"]];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:script options:NSJSONWritingPrettyPrinted error:nil];
+    [data writeToFile:path atomically:YES];
+
+    NSMutableDictionary *cfg = [self loadGestureConfig];
+    cfg[@"selected"] = [name stringByAppendingString:@".json"];
+    [self saveGestureConfig:cfg];
+}
+
+- (void)showScriptList {
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self gestureDir] error:nil];
+    NSMutableArray *jsonFiles = [NSMutableArray array];
+    for (NSString *f in files) if ([f.pathExtension isEqualToString:@"json"]) [jsonFiles addObject:f];
+    if (!jsonFiles.count) return;
+
+    NSMutableDictionary *cfg = [self loadGestureConfig];
+    NSString *selected = cfg[@"selected"];
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"选择脚本（单击运行）" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *f in jsonFiles) {
+        NSString *title = f.stringByDeletingPathExtension;
+        if ([f isEqualToString:selected]) title = [title stringByAppendingString:@" ✓"];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            NSMutableDictionary *c = [self loadGestureConfig];
+            c[@"selected"] = f;
+            [self saveGestureConfig:c];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
+    UIViewController *topVC = self.window.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    [topVC presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)showScriptSettings {
+    NSMutableDictionary *cfg = [self loadGestureConfig];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"脚本设置" message:@"修改循环次数、速度、间隔" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"循环次数（0=无限）";
+        tf.text = [cfg[@"repeat"] stringValue];
+        tf.keyboardType = UIKeyboardTypeNumberPad;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"速度 0.5~3.0";
+        tf.text = [cfg[@"speed"] stringValue];
+        tf.keyboardType = UIKeyboardTypeDecimalPad;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"循环间隔秒";
+        tf.text = [cfg[@"interval"] stringValue];
+        tf.keyboardType = UIKeyboardTypeDecimalPad;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSMutableDictionary *c = [self loadGestureConfig];
+        c[@"repeat"] = @([alert.textFields[0].text integerValue]);
+        c[@"speed"] = @(MAX(0.1, [alert.textFields[1].text doubleValue]));
+        c[@"interval"] = @(MAX(0, [alert.textFields[2].text doubleValue]));
+        [self saveGestureConfig:c];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
+    UIViewController *topVC = self.window.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    [topVC presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)runSelectedScript {
+    if (self.gestureState != 0) return;
+    NSMutableDictionary *cfg = [self loadGestureConfig];
+    NSString *selected = cfg[@"selected"];
+    if (selected.length == 0) return;
+
+    NSString *path = [[self gestureDir] stringByAppendingPathComponent:selected];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return;
+    NSDictionary *script = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (!script) return;
+
+    self.gestureState = 2;
+    self.window.hidden = YES; 
+    [[VDFGesturePlayer shared] playScript:script
+                                    speed:[cfg[@"speed"] doubleValue]
+                                   repeat:[cfg[@"repeat"] integerValue]
+                                 interval:[cfg[@"interval"] doubleValue]];
+}
+
+- (void)stopPlaying {
+    if (self.gestureState != 2) return;
+    [[VDFGesturePlayer shared] stop];
+    self.gestureState = 0;
+    self.window.hidden = NO;
+}
+
+// 保留原本的点击震动和模拟音量
+- (void)playClickHapticAndVolumeDown {
     NSString *customStr = [NSString stringWithContentsOfFile:@"/var/mobile/Library/Preferences/volumefloater_customhaptic.txt" encoding:NSUTF8StringEncoding error:nil];
     BOOL isCustom = [customStr isEqualToString:@"1"];
     
@@ -477,9 +935,7 @@ void simulateVolumeDown(void) {
             if (!error) {
                 [self.hapticEngine startAndReturnError:nil]; 
                 id<CHHapticPatternPlayer> player = [self.hapticEngine createPlayerWithPattern:pattern error:&error];
-                if (!error) {
-                    [player startAtTime:0 error:&error];
-                }
+                if (!error) [player startAtTime:0 error:&error];
             }
         } else {
             UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
@@ -487,11 +943,9 @@ void simulateVolumeDown(void) {
             [gen impactOccurred];
         }
     }
-    
     simulateVolumeDown();
 }
 
-// 【核心修复】：拖拽时动态计算边界
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         [self.floatBtn cancelTrackingWithEvent:nil];
@@ -552,6 +1006,23 @@ void simulateVolumeDown(void) {
 }
 @end
 
+// ================= Hook 拦截物理音量键 =================
+%hook SBVolumeControl
+- (void)decreaseVolume {
+    FloaterManager *fm = [FloaterManager sharedInstance];
+    if (fm.gestureState == 1) { [fm stopRecordingAndSave]; return; }
+    if (fm.gestureState == 2) { [fm stopPlaying]; return; }
+    %orig;
+}
+- (void)_decreaseVolume {
+    FloaterManager *fm = [FloaterManager sharedInstance];
+    if (fm.gestureState == 1) { [fm stopRecordingAndSave]; return; }
+    if (fm.gestureState == 2) { [fm stopPlaying]; return; }
+    %orig;
+}
+%end
+
+// ================= 初始化 =================
 static void showFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void hideFloater(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
 static void updateUI(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo);
